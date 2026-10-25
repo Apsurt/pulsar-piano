@@ -1,0 +1,8 @@
+[package]
+name = "pulsar-engine"
+version = "0.1.0"
+edition.workspace = true
+repository.workspace = true
+description = "Pulsar's MIDI + audio engine. Pure Rust, no Tauri dependency."
+
+[dependencies]

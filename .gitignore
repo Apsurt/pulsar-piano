@@ -1,0 +1,13 @@
+node_modules/
+dist/
+target/
+src-tauri/gen/schemas/
+
+# Never commit updater signing keys
+*.key
+*.key.password
+
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/

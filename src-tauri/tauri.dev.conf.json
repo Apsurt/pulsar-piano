@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Pulsar (Dev)",
+  "identifier": "com.apsurt.pulsar.dev",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Pulsar (Dev)",
+        "width": 1200,
+        "height": 760,
+        "minWidth": 800,
+        "minHeight": 500
+      }
+    ]
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false
+  }
+}
