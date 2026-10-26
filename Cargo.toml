@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/engine", "src-tauri"]
+members = ["crates/engine", "crates/song", "src-tauri"]
 
 [workspace.package]
 edition = "2024"

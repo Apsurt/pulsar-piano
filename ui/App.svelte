@@ -1,10 +1,45 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Spring } from "svelte/motion";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import Stage from "./lib/Stage.svelte";
   import { engine, type InstrumentInfo, type MidiDevice } from "./lib/engine";
   import { live, press, release, heldCount } from "./lib/live";
   import { COMPUTER_KEYS, noteName } from "./lib/keyboard";
+  import { songs, type Song } from "./lib/songs";
+  import Library from "./views/Library.svelte";
+  import Practice from "./views/Practice.svelte";
+
+  type View = "play" | "songs" | "practice";
+  let view = $state<View>("play");
+  let openSong = $state<{ id: string; song: Song } | null>(null);
+  let libraryRefresh = $state(0);
+  let dropping = $state(false);
+
+  function openPractice(id: string) {
+    songs
+      .get(id)
+      .then((song) => {
+        openSong = { id, song };
+        view = "practice";
+      })
+      .catch((e) => showError(String(e)));
+  }
+
+  async function importDropped(paths: string[]) {
+    const midi = paths.filter((p) => /\.midi?$/i.test(p));
+    if (!midi.length) return showError("Only .mid / .midi files can be imported for now.");
+    try {
+      const result = await songs.importFiles(midi);
+      if (result.errors.length) showError(result.errors.join("\n"));
+      if (result.songs.length) {
+        view = "songs";
+        libraryRefresh++;
+      }
+    } catch (e) {
+      showError(String(e));
+    }
+  }
 
   let instruments = $state<InstrumentInfo[]>([]);
   let current = $state<string | null>(null);
@@ -51,6 +86,8 @@
 
   function keydown(e: KeyboardEvent) {
     if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    // Typing a song title must not play notes.
+    if ((e.target as HTMLElement).closest?.("input:not([type=range]), textarea")) return;
     if (e.code === "Space") {
       e.preventDefault();
       (document.activeElement as HTMLElement | null)?.blur();
@@ -85,6 +122,7 @@
       engine.onNote(({ key, velocity }) => {
         if (velocity > 0) {
           press(key, velocity);
+          live.practice?.press(key);
           lastNote = { key, velocity };
           pop.set(1.14, { instant: true });
           pop.target = 1;
@@ -101,6 +139,14 @@
         if (s.state === "ready") current = s.instrument.id;
         if (s.state !== "loading") loading = null;
         if (s.state === "failed") showError(`${s.instrument.name}: ${s.error}`);
+      }),
+      getCurrentWebview().onDragDropEvent(({ payload }) => {
+        if (payload.type === "enter" || payload.type === "over") dropping = true;
+        else if (payload.type === "leave") dropping = false;
+        else if (payload.type === "drop") {
+          dropping = false;
+          importDropped(payload.paths);
+        }
       }),
     ];
 
@@ -128,7 +174,18 @@
 
 <div class="app">
   <header class="bar">
-    <div class="brand"><span class="mark" aria-hidden="true"></span>Pulsar</div>
+    <div class="left">
+      <div class="brand"><span class="mark" aria-hidden="true"></span>Pulsar</div>
+      <nav class="tabs" aria-label="Section">
+        <button class:on={view === "play"} aria-current={view === "play"} onclick={() => (view = "play")}>Play</button>
+        <button class:on={view === "songs"} aria-current={view === "songs"} onclick={() => (view = "songs")}>Songs</button>
+        {#if openSong}
+          <button class="song-tab" class:on={view === "practice"} aria-current={view === "practice"} onclick={() => (view = "practice")}>
+            {openSong.song.title}
+          </button>
+        {/if}
+      </nav>
+    </div>
 
     <nav class="instruments" aria-label="Instrument">
       {#each instruments as i (i.id)}
@@ -176,24 +233,42 @@
   <main class="stage">
     <Stage bind:keyboardHeight onpress={(k, v) => engine.note(k, v)} onrelease={(k) => engine.note(k, 0)} />
 
-    <div class="readout" style:bottom="{keyboardHeight}px">
-      {#if lastNote}
-        <div class="big" style:transform="scale({pop.current})">{noteName(lastNote.key)}</div>
-        <div class="mono line">
-          {noteName(lastNote.key)} · vel {lastNote.velocity}{#if held > 1} · {held} keys{/if}
-        </div>
-      {:else}
-        <div class="hint">
-          <div class="hint-title">Play anything.</div>
-          <div class="dim">Your MIDI keyboard, computer keys A – ' , or click the keys below.</div>
-        </div>
-      {/if}
-    </div>
+    {#if view === "play"}
+      <div class="readout" style:bottom="{keyboardHeight}px">
+        {#if lastNote}
+          <div class="big" style:transform="scale({pop.current})">{noteName(lastNote.key)}</div>
+          <div class="mono line">
+            {noteName(lastNote.key)} · vel {lastNote.velocity}{held > 1 ? ` · ${held} keys` : ""}
+          </div>
+        {:else}
+          <div class="hint">
+            <div class="hint-title">Play anything.</div>
+            <div class="dim">Your MIDI keyboard, computer keys A – ' , or click the keys below.</div>
+          </div>
+        {/if}
+      </div>
 
-    <div class="chips" style:bottom="{keyboardHeight + 16}px">
-      <span class="chip" class:on={sustain}>Sustain</span>
-      <span class="chip mono">Keys {noteName((octave + 1) * 12)} · Z/X</span>
-    </div>
+      <div class="chips" style:bottom="{keyboardHeight + 16}px">
+        <span class="chip" class:on={sustain}>Sustain</span>
+        <span class="chip mono">Keys {noteName((octave + 1) * 12)} · Z/X</span>
+      </div>
+    {/if}
+
+    {#if view === "songs"}
+      <div class="panel" style:bottom="{keyboardHeight}px">
+        <Library refresh={libraryRefresh} onopen={openPractice} onerror={showError} />
+      </div>
+    {/if}
+
+    {#if openSong && view === "practice"}
+      {#key openSong.id}
+        <Practice song={openSong.song} onback={() => (view = "songs")} />
+      {/key}
+    {/if}
+
+    {#if dropping}
+      <div class="drop" style:bottom="{keyboardHeight}px">Drop MIDI files to add them to your songs</div>
+    {/if}
 
     {#if error || fatal}
       <div class="toast" role="alert">{fatal ?? error}</div>
@@ -222,6 +297,12 @@
     z-index: 2;
   }
 
+  .left {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    min-width: 0;
+  }
   .brand {
     display: flex;
     align-items: center;
@@ -229,6 +310,57 @@
     font-size: 17px;
     font-weight: 600;
     letter-spacing: -0.02em;
+  }
+  .tabs {
+    display: flex;
+    gap: 2px;
+    min-width: 0;
+  }
+  .tabs button {
+    font-size: 13px;
+    font-weight: 500;
+    padding: 7px 12px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--mist);
+    cursor: pointer;
+  }
+  .tabs button:hover {
+    color: var(--snow);
+  }
+  .tabs button.on {
+    color: var(--snow);
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .song-tab {
+    max-width: 180px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .panel {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+  }
+  .drop {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    right: 16px;
+    display: grid;
+    place-items: center;
+    border: 2px dashed rgba(127, 212, 255, 0.6);
+    border-radius: 24px;
+    background: rgba(10, 10, 15, 0.8);
+    color: var(--tint);
+    font-size: 18px;
+    font-weight: 500;
+    pointer-events: none;
+    z-index: 3;
   }
   .mark {
     width: 10px;
@@ -432,6 +564,8 @@
     border: 1px solid rgba(255, 122, 89, 0.4);
     color: var(--coral);
     font-size: 13px;
+    white-space: pre-line;
+    z-index: 4;
   }
 
   @keyframes shimmer {

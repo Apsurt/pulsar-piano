@@ -1,4 +1,5 @@
 mod settings;
+mod songs;
 
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -245,8 +246,12 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data = app.path().app_data_dir()?;
+            app.manage(songs::Songs(pulsar_song::Library::open(
+                data.join("songs"),
+            )?));
             let sounds = data.join("sounds");
             eprintln!("sounds folder: {}", sounds.display());
             std::fs::create_dir_all(&sounds)?;
@@ -279,7 +284,13 @@ pub fn run() {
             set_volume,
             open_sounds_folder,
             check_update,
-            install_update
+            install_update,
+            songs::list_songs,
+            songs::get_song,
+            songs::import_songs_dialog,
+            songs::import_song_files,
+            songs::rename_song,
+            songs::delete_song
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

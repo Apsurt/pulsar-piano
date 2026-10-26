@@ -14,9 +14,11 @@ tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 pulsar-engine = { path = "../crates/engine" }
+pulsar-song = { version = "0.1.0", path = "../crates/song" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tauri = { version = "2.12.5", features = [] }
+tauri-plugin-dialog = "2.8.3"
 tauri-plugin-opener = "2.7.2"
 tauri-plugin-single-instance = "2.5.4"
 tauri-plugin-updater = "2.14.0"

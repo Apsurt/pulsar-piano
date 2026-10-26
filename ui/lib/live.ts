@@ -1,7 +1,9 @@
 // Per-frame state the canvas reads. Deliberately not reactive: it changes on every note.
+import type { Practice } from "./practice";
 
 export type Beam = { key: number; velocity: number; born: number; released: number | null };
 export type Flare = { key: number; velocity: number; born: number };
+export type SongView = "falling" | "tape";
 
 export const live = {
   /** 0 = key up */
@@ -11,6 +13,9 @@ export const live = {
   sustain: false,
   beams: [] as Beam[],
   flares: [] as Flare[],
+  /** The song being practiced; the stage draws it instead of free-play beams. */
+  practice: null as Practice | null,
+  songView: "falling" as SongView,
 };
 
 export function press(key: number, velocity: number) {
@@ -18,7 +23,7 @@ export function press(key: number, velocity: number) {
   release(key, now);
   live.velocity[key] = velocity;
   live.glow[key] = 1;
-  live.beams.push({ key, velocity, born: now, released: null });
+  if (!live.practice) live.beams.push({ key, velocity, born: now, released: null });
   live.flares.push({ key, velocity, born: now });
   if (live.beams.length > 600) live.beams.shift();
 }

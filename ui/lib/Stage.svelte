@@ -2,7 +2,8 @@
   // The play surface: light beams rise from every note, over an 88-key keyboard. One canvas, one rAF loop.
   import { onMount } from "svelte";
   import { live, type Beam, type Flare } from "./live";
-  import { HIGHEST, LOWEST, hitTest, layout, type KeyRect } from "./keyboard";
+  import { HIGHEST, LOWEST, hitTest, layout, noteName, type KeyRect } from "./keyboard";
+  import type { Practice, PracticeNote } from "./practice";
 
   let {
     onpress,
@@ -20,8 +21,21 @@
   const WHITE: RGB = [233, 233, 239];
   const WHITE_LIT: RGB = [172, 227, 255];
   const BLACK: RGB = [14, 14, 19];
+  const AMBER: RGB = [255, 181, 71];
+  const CORAL: RGB = [255, 122, 89];
+  const VOID: RGB = [10, 10, 15];
+  const GREY: RGB = [70, 70, 82];
+  const SNOW: RGB = [242, 242, 247];
   /** How fast light travels up, px per second. */
   const SPEED = 240;
+  /** Falling notes: px per second of song. */
+  const FALL = 150;
+  /** Note tape: px per second of song, and the playhead's position as a fraction of the width. */
+  const TAPE = 120;
+  const PLAYHEAD = 0.28;
+  /** Room the practice controls take at the top of the stage, and the gap kept above the keyboard. */
+  const OVERLAY_TOP = 160;
+  const OVERLAY_BOTTOM = 16;
 
   const rgba = (c: RGB, a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
   const mix = (a: RGB, b: RGB, t: number) =>
@@ -68,12 +82,139 @@
     ctx.fillStyle = floor;
     ctx.fillRect(0, kbY - floorH, w, floorH);
 
+    const practice = live.practice;
+    if (practice) {
+      practice.update(dt);
+      if (live.songView === "falling") drawFalling(practice);
+      else drawTape(practice);
+    }
+
     ctx.globalCompositeOperation = "lighter";
     live.beams = live.beams.filter((b) => drawBeam(b, now));
     live.flares = live.flares.filter((f) => drawFlare(f, now));
     ctx.globalCompositeOperation = "source-over";
 
     drawKeyboard(dt);
+    if (practice) drawGuides(practice, now);
+  }
+
+  const handColor = (n: PracticeNote): RGB => (n.hand === "left" ? AMBER : PULSE);
+
+  /** Sets fill and alpha for a song note: bright when hit, grey when missed, ghosted when not your hand. */
+  function styleNote(p: Practice, n: PracticeNote) {
+    const color = handColor(n);
+    ctx.globalAlpha = !p.isActive(n) ? 0.16 : n.state === "missed" ? 0.45 : 1;
+    ctx.fillStyle =
+      n.state === "hit" ? mix(color, SNOW, 0.6) : n.state === "missed" ? mix(color, GREY, 0.7) : rgba(color, 0.92);
+  }
+
+  /** A note name in a small pill, so it reads even on narrow black-key notes. */
+  function label(name: string, cx: number, cy: number, fill: string) {
+    const tw = ctx.measureText(name).width + 8;
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.roundRect(cx - tw / 2, cy - 7, tw, 14, 4);
+    ctx.fill();
+    ctx.fillStyle = rgba(VOID, 0.9);
+    ctx.fillText(name, cx, cy + 0.5);
+  }
+
+  function drawFalling(p: Practice) {
+    const ahead = kbY / FALL;
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    for (const bar of p.bars) {
+      const y = kbY - (bar - p.time) * FALL;
+      if (y >= 0 && y <= kbY) ctx.fillRect(0, Math.round(y), w, 1);
+    }
+    ctx.font = "600 10px 'Inter Variable', sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const n of p.notes) {
+      if (n.end < p.time || n.start > p.time + ahead) continue;
+      const r = keys[n.key];
+      if (!r) continue;
+      const bottom = Math.min(kbY, kbY - (n.start - p.time) * FALL);
+      const top = kbY - (n.end - p.time) * FALL;
+      if (bottom - top < 1) continue;
+      const x = r.black ? r.x : r.x + 2;
+      const nw = r.black ? r.w : r.w - 4;
+      styleNote(p, n);
+      const fill = ctx.fillStyle as string;
+      ctx.beginPath();
+      ctx.roundRect(x, top, nw, bottom - top, Math.min(5, nw / 2));
+      ctx.fill();
+      if (p.isActive(n) && n.state === "pending" && bottom - top > 16) label(noteName(n.key), x + nw / 2, bottom - 10, fill);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  let tapeRange = { practice: null as Practice | null, low: 48, high: 84 };
+
+  function drawTape(p: Practice) {
+    if (tapeRange.practice !== p) {
+      const keysUsed = p.notes.map((n) => n.key);
+      tapeRange = { practice: p, low: Math.min(...keysUsed), high: Math.max(...keysUsed) };
+    }
+    const top = OVERLAY_TOP + 16;
+    const bottom = kbY - OVERLAY_BOTTOM - 16;
+    const span = Math.max(12, tapeRange.high - tapeRange.low);
+    const yOf = (key: number) => bottom - ((key - tapeRange.low) / span) * (bottom - top);
+    const playX = w * PLAYHEAD;
+
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    for (const bar of p.bars) {
+      const x = playX + (bar - p.time) * TAPE;
+      if (x >= 0 && x <= w) ctx.fillRect(Math.round(x), top - 12, 1, bottom - top + 24);
+    }
+    ctx.fillStyle = rgba(PULSE, 0.55);
+    ctx.fillRect(playX - 1, top - 20, 2, bottom - top + 40);
+
+    ctx.font = "600 12px 'Inter Variable', sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    for (const n of p.notes) {
+      const x0 = playX + (n.start - p.time) * TAPE;
+      const x1 = playX + (n.end - p.time) * TAPE;
+      if (x1 < 0 || x0 > w) continue;
+      const name = noteName(n.key);
+      const width = Math.max(x1 - x0, ctx.measureText(name).width + 12);
+      const y = yOf(n.key);
+      styleNote(p, n);
+      ctx.beginPath();
+      ctx.roundRect(x0, y - 10, width, 20, 6);
+      ctx.fill();
+      ctx.fillStyle = rgba(VOID, 0.9);
+      ctx.fillText(name, x0 + 6, y + 0.5);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** Lights the keys to play now: pulsing for the chord being waited on, softly for sounding notes. */
+  function drawGuides(p: Practice, now: number) {
+    const waiting = p.waiting;
+    const due = waiting
+      ? waiting.notes.filter((n) => p.isActive(n) && n.state === "pending")
+      : p.notes.filter((n) => n.start <= p.time && n.end > p.time && p.isActive(n) && n.state !== "missed");
+    const strength = waiting ? 0.35 + 0.25 * Math.sin(now / 140) : 0.3;
+    for (const n of due) {
+      const r = keys[n.key];
+      if (!r || live.velocity[n.key] > 0) continue;
+      const x = r.black ? r.x : r.x + 1;
+      const kw = r.black ? r.w : r.w - 2;
+      ctx.fillStyle = rgba(handColor(n), strength);
+      ctx.beginPath();
+      ctx.roundRect(x, kbY, kw, r.h, [0, 0, 5, 5]);
+      ctx.fill();
+    }
+    for (let k = LOWEST; k <= HIGHEST; k++) {
+      const age = (now - p.wrongAt[k]) / 300;
+      const r = keys[k];
+      if (age >= 1 || !r) continue;
+      ctx.fillStyle = rgba(CORAL, 0.6 * (1 - age));
+      ctx.beginPath();
+      ctx.roundRect(r.black ? r.x : r.x + 1, kbY, r.black ? r.w : r.w - 2, r.h, [0, 0, 5, 5]);
+      ctx.fill();
+    }
   }
 
   function drawBeam(b: Beam, now: number): boolean {

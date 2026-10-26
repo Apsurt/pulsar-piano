@@ -12,7 +12,8 @@ UI ──commands──► engine control (instrument, volume, …)
 
 ```
 crates/engine/   MIDI, audio, instruments. Pure Rust, no Tauri dependency
-src-tauri/       Tauri commands/events, thin shell around the engine
+crates/song/     Song model, MIDI import, song library (JSON in app data)
+src-tauri/       Tauri commands/events, thin shell around engine and songs
 ui/              Svelte 5 + Vite + TS frontend
 ```
 
