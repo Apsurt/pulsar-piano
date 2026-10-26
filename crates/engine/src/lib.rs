@@ -25,10 +25,17 @@ pub use midi_in::MidiDevice;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Where an event came from: a MIDI device, or the app itself (on-screen / computer keys).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    Device,
+    App,
+}
+
 /// What the engine reports back, for the UI to visualise.
 #[derive(Clone, Debug)]
 pub enum EngineEvent {
-    Midi(MidiEvent),
+    Midi(MidiEvent, Source),
     Devices(Vec<MidiDevice>),
     InstrumentLoading(InstrumentInfo),
     InstrumentChanged(InstrumentInfo),
@@ -103,7 +110,7 @@ impl Engine {
 
     /// Play an event from a non-hardware source (on-screen or computer keyboard).
     pub fn send(&self, event: MidiEvent) {
-        midi_in::dispatch(&self.input, &self.events, event);
+        midi_in::dispatch(&self.input, &self.events, event, Source::App);
     }
 
     pub fn instruments(&self) -> Vec<InstrumentInfo> {

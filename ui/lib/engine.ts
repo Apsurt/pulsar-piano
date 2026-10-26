@@ -18,7 +18,8 @@ export type InstrumentState = {
   instrument: InstrumentInfo;
   error: string | null;
 };
-export type Note = { key: number; velocity: number };
+/** `device`: played on a MIDI device rather than on screen / computer keys. */
+export type Note = { key: number; velocity: number; device: boolean };
 
 const on = <T>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> =>
   listen<T>(event, (e) => cb(e.payload));

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
-use pulsar_engine::{CC_SUSTAIN, Engine, EngineEvent, InstrumentInfo, MidiEvent, Status};
+use pulsar_engine::{CC_SUSTAIN, Engine, EngineEvent, InstrumentInfo, MidiEvent, Source, Status};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -39,6 +39,8 @@ struct Note {
     key: u8,
     /// 0 means released.
     velocity: u8,
+    /// Played on a MIDI device rather than on screen / computer keys.
+    device: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -155,18 +157,37 @@ fn forward_events(app: AppHandle, events: Receiver<EngineEvent>) {
     std::thread::spawn(move || {
         for event in events {
             let _ = match event {
-                EngineEvent::Midi(MidiEvent::NoteOn { key, velocity, .. }) => {
-                    app.emit("note", Note { key, velocity })
+                EngineEvent::Midi(MidiEvent::NoteOn { key, velocity, .. }, source) => {
+                    let device = source == Source::Device;
+                    app.emit(
+                        "note",
+                        Note {
+                            key,
+                            velocity,
+                            device,
+                        },
+                    )
                 }
-                EngineEvent::Midi(MidiEvent::NoteOff { key, .. }) => {
-                    app.emit("note", Note { key, velocity: 0 })
+                EngineEvent::Midi(MidiEvent::NoteOff { key, .. }, source) => {
+                    let device = source == Source::Device;
+                    app.emit(
+                        "note",
+                        Note {
+                            key,
+                            velocity: 0,
+                            device,
+                        },
+                    )
                 }
-                EngineEvent::Midi(MidiEvent::ControlChange {
-                    controller: CC_SUSTAIN,
-                    value,
-                    ..
-                }) => app.emit("pedal", value >= 64),
-                EngineEvent::Midi(_) => Ok(()),
+                EngineEvent::Midi(
+                    MidiEvent::ControlChange {
+                        controller: CC_SUSTAIN,
+                        value,
+                        ..
+                    },
+                    _,
+                ) => app.emit("pedal", value >= 64),
+                EngineEvent::Midi(..) => Ok(()),
                 EngineEvent::Devices(devices) => app.emit("devices", devices),
                 EngineEvent::InstrumentLoading(instrument) => app.emit(
                     "instrument",

@@ -10,7 +10,7 @@ use midir::{Ignore, MidiInput, MidiInputConnection};
 use rtrb::{Consumer, Producer};
 use serde::Serialize;
 
-use crate::{EngineEvent, Instrument, MidiEvent};
+use crate::{EngineEvent, Instrument, MidiEvent, Source};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MidiDevice {
@@ -24,11 +24,12 @@ pub(crate) fn dispatch(
     input: &Mutex<Producer<MidiEvent>>,
     events: &mpsc::Sender<EngineEvent>,
     event: MidiEvent,
+    source: Source,
 ) {
     if let Ok(mut queue) = input.lock() {
         let _ = queue.push(event);
     }
-    let _ = events.send(EngineEvent::Midi(event));
+    let _ = events.send(EngineEvent::Midi(event, source));
 }
 
 pub(crate) fn spawn_housekeeping(
@@ -99,7 +100,7 @@ fn connect(
         "pulsar-in",
         move |_, bytes, _| {
             if let Some(event) = MidiEvent::parse(bytes) {
-                dispatch(&input, &events, event);
+                dispatch(&input, &events, event, Source::Device);
             }
         },
         (),

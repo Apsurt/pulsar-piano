@@ -29,8 +29,8 @@ fn main() {
     println!("play your MIDI keyboard; Ctrl-C to quit");
     for event in events {
         match event {
-            EngineEvent::Midi(m) => println!(
-                "{m:?}  ({:.1} ms output latency)",
+            EngineEvent::Midi(m, source) => println!(
+                "{m:?} from {source:?}  ({:.1} ms output latency)",
                 engine.status().latency_ms
             ),
             other => println!("{other:?}"),
