@@ -167,3 +167,49 @@ describe("Pulsar playing notes", () => {
     expect(p.isAutoKey(60)).toBe(false);
   });
 });
+
+describe("listening to some tracks", () => {
+  it("plays and shows only the tracks you pick to hear", () => {
+    const p = new Practice(song([[60, 0, 1], [48, 0, 1, 1]]), 0);
+    const played: string[] = [];
+    p.sound = (key, velocity) => played.push(`${key}:${velocity}`);
+    p.setMode("listen");
+    p.setHeard([1]);
+    expect(p.notes.map((n) => p.isActive(n))).toEqual([false, true]);
+    p.playing = true;
+    run(p, 0.5);
+    expect(played).toEqual(["48:90"]);
+    // What you play when practicing is a separate choice.
+    expect([...p.played]).toEqual([0, 1, 2]);
+  });
+});
+
+describe("keys that may sound (wrong keys silent)", () => {
+  it("lets any key sound unless a song is playing", () => {
+    const p = new Practice(song([[60, 0, 1]]), 0);
+    expect(p.soundKeys()).toBeNull();
+    p.setMode("listen");
+    p.playing = true;
+    expect(p.soundKeys()).toBeNull();
+  });
+
+  it("waiting: the next two chords' notes still to play, on your tracks", () => {
+    const p = new Practice(song([[60, 0, 1], [64, 0, 1], [48, 0, 1, 1], [62, 1, 1], [65, 2, 1]]), 0);
+    p.setPlayed([0]);
+    p.playing = true;
+    expect(p.soundKeys()).toEqual([60, 62, 64]);
+    p.press(60);
+    expect(p.soundKeys()).toEqual([62, 64]);
+    p.press(64);
+    expect(p.soundKeys()).toEqual([62, 65]);
+  });
+
+  it("keeping tempo: notes around now and just ahead", () => {
+    const p = new Practice(song([[60, 0, 1], [62, 0.4, 1], [64, 2, 1]]), 0);
+    p.setMode("tempo");
+    p.playing = true;
+    expect(p.soundKeys()).toEqual([60, 62]);
+    run(p, 1.7);
+    expect(p.soundKeys()).toEqual([64]);
+  });
+});

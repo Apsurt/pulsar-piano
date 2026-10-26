@@ -114,10 +114,10 @@
     ctx.shadowBlur = 0;
   }
 
-  /** Sets fill and alpha for a song note: bright when hit, grey when missed, ghosted when not your track. */
-  function styleNote(p: Practice, n: PracticeNote) {
+  /** Sets fill and alpha for a song note: bright when hit, grey when missed. */
+  function styleNote(n: PracticeNote) {
     const color = trackColor(n.track);
-    ctx.globalAlpha = !p.isActive(n) ? 0.16 : n.state === "missed" ? 0.45 : 1;
+    ctx.globalAlpha = n.state === "missed" ? 0.45 : 1;
     ctx.fillStyle =
       n.state === "hit" ? mix(color, SNOW, 0.6) : n.state === "missed" ? mix(color, GREY, 0.7) : rgba(color, 0.92);
   }
@@ -143,8 +143,9 @@
     ctx.font = "600 10px 'Inter Variable', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    // Tracks you switched off aren't drawn at all.
     for (const n of p.notes) {
-      if (n.end < p.time || n.start > p.time + ahead) continue;
+      if (n.end < p.time || n.start > p.time + ahead || !p.isActive(n)) continue;
       const r = keys[n.key];
       if (!r) continue;
       const bottom = Math.min(kbY, kbY - (n.start - p.time) * FALL);
@@ -152,22 +153,24 @@
       if (bottom - top < 1) continue;
       const x = r.black ? r.x : r.x + 2;
       const nw = r.black ? r.w : r.w - 4;
-      styleNote(p, n);
+      styleNote(n);
       const fill = ctx.fillStyle as string;
       ctx.beginPath();
       ctx.roundRect(x, top, nw, bottom - top, Math.min(5, nw / 2));
       ctx.fill();
-      if (p.isActive(n) && n.state === "pending" && bottom - top > 16) label(noteName(n.key), x + nw / 2, bottom - 10, fill);
+      if (n.state === "pending" && bottom - top > 16) label(noteName(n.key), x + nw / 2, bottom - 10, fill);
     }
     ctx.globalAlpha = 1;
   }
 
-  let tapeRange = { practice: null as Practice | null, low: 48, high: 84 };
+  /** The tape's key range fits the tracks being shown, and is worked out again when they change. */
+  let tapeRange = { practice: null as Practice | null, shown: null as Set<number> | null, low: 48, high: 84 };
 
   function drawTape(p: Practice) {
-    if (tapeRange.practice !== p) {
-      const keysUsed = p.notes.map((n) => n.key);
-      tapeRange = { practice: p, low: Math.min(...keysUsed), high: Math.max(...keysUsed) };
+    if (tapeRange.practice !== p || tapeRange.shown !== p.shown) {
+      const shown = p.notes.filter((n) => p.isActive(n));
+      const keysUsed = (shown.length ? shown : p.notes).map((n) => n.key);
+      tapeRange = { practice: p, shown: p.shown, low: Math.min(...keysUsed), high: Math.max(...keysUsed) };
     }
     const top = OVERLAY_TOP + 16;
     const bottom = kbY - OVERLAY_BOTTOM - 16;
@@ -189,11 +192,11 @@
     for (const n of p.notes) {
       const x0 = playX + (n.start - p.time) * TAPE;
       const x1 = playX + (n.end - p.time) * TAPE;
-      if (x1 < 0 || x0 > w) continue;
+      if (x1 < 0 || x0 > w || !p.isActive(n)) continue;
       const name = noteName(n.key);
       const width = Math.max(x1 - x0, ctx.measureText(name).width + 12);
       const y = yOf(n.key);
-      styleNote(p, n);
+      styleNote(n);
       ctx.beginPath();
       ctx.roundRect(x0, y - 10, width, 20, 6);
       ctx.fill();

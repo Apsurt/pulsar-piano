@@ -26,6 +26,10 @@ const CHORD_SPREAD = 0.03;
 const HIT_WINDOW = 0.18;
 /** Wait mode: how early (real seconds) a press counts for the coming chord. */
 const EARLY = 0.25;
+/** With wrong keys silent, wait mode lets this many coming chords sound, so a quick next note isn't cut off. */
+const SOUND_CHORDS = 2;
+/** With wrong keys silent, tempo mode lets notes this far ahead (real seconds) sound already. */
+const SOUND_AHEAD = 0.35;
 
 export class Practice {
   readonly notes: PracticeNote[];
@@ -49,8 +53,10 @@ export class Practice {
   passes = 0;
   lastScore: number | null = null;
   mode: Mode = "wait";
-  /** The tracks you play; the rest are shown faintly and left out of the score. */
+  /** The tracks you play; the rest aren't drawn and are left out of the score. */
   played: Set<number>;
+  /** Listen mode: the tracks Pulsar plays (and draws). */
+  heard: Set<number>;
   /** Pulsar plays the tracks you don't. */
   accompany = false;
   hits = 0;
@@ -87,6 +93,7 @@ export class Practice {
     this.duration = Math.max(0, ...this.notes.map((n) => n.end));
     this.tracks = song.tracks.map((t, i) => ({ name: t.name, notes: song.notes.filter((n) => n.track === i).length }));
     this.played = new Set(this.tracks.keys());
+    this.heard = new Set(this.tracks.keys());
     this.firstNote = this.chords[0]?.start ?? 0;
     this.leadIn = Math.max(0, leadIn);
     this.time = this.startTime;
@@ -123,14 +130,19 @@ export class Practice {
     if (atStart) this.time = this.startTime;
   }
 
-  /** Yours to play (in listen mode every note is shown as if it were). */
-  isActive(note: PracticeNote): boolean {
-    return this.mode === "listen" || this.played.has(note.track);
+  /** The tracks on screen: the ones you play, or when listening, the ones you hear. */
+  get shown(): Set<number> {
+    return this.mode === "listen" ? this.heard : this.played;
   }
 
-  /** Pulsar plays this note: all of them when listening, the other tracks when accompanying. */
+  /** On screen, and yours to play (or, when listening, to hear). */
+  isActive(note: PracticeNote): boolean {
+    return this.shown.has(note.track);
+  }
+
+  /** Pulsar plays this note: the heard tracks when listening, the other tracks when accompanying. */
   isAuto(note: PracticeNote): boolean {
-    return this.mode === "listen" || (this.accompany && !this.played.has(note.track));
+    return this.mode === "listen" ? this.heard.has(note.track) : this.accompany && !this.played.has(note.track);
   }
 
   /** Whether Pulsar is sounding `key` right now (so its echo isn't taken for your press). */
@@ -147,6 +159,23 @@ export class Practice {
 
   get total(): number {
     return this.notes.filter((n) => this.isActive(n)).length;
+  }
+
+  /** For "wrong keys silent": the keys that may sound now (what's due, with some slack), or null for any key. */
+  soundKeys(): number[] | null {
+    if (!this.playing || this.finished || this.mode === "listen") return null;
+    const keys = new Set<number>();
+    const due = (n: PracticeNote) => this.isActive(n) && n.state === "pending";
+    if (this.mode === "wait") {
+      this.nextChord();
+      for (const chord of this.chords.slice(this.cursor, this.cursor + SOUND_CHORDS))
+        for (const n of chord.notes) if (due(n)) keys.add(n.key);
+    } else {
+      const from = this.time - HIT_WINDOW * this.speed;
+      const to = this.time + (HIT_WINDOW + SOUND_AHEAD) * this.speed;
+      for (const n of this.notes) if (n.start >= from && n.start <= to && due(n)) keys.add(n.key);
+    }
+    return [...keys].sort((a, b) => a - b);
   }
 
   /** Wait mode: the chord being waited for, once the song has reached it. */
@@ -243,9 +272,18 @@ export class Practice {
 
   /** Which tracks to play; unknown ones are dropped, and nothing selected means all of them. */
   setPlayed(tracks: Iterable<number>) {
-    const played = [...tracks].filter((t) => t >= 0 && t < this.tracks.length);
-    this.played = new Set(played.length ? played : this.tracks.keys());
+    this.played = this.validTracks(tracks);
     this.recount();
+  }
+
+  /** Which tracks to hear in listen mode, the same way. */
+  setHeard(tracks: Iterable<number>) {
+    this.heard = this.validTracks(tracks);
+  }
+
+  private validTracks(tracks: Iterable<number>): Set<number> {
+    const valid = [...tracks].filter((t) => t >= 0 && t < this.tracks.length);
+    return new Set(valid.length ? valid : this.tracks.keys());
   }
 
   /** Pulsar's notes between two song times: ends first, so a repeated key sounds again. */

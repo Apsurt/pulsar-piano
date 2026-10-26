@@ -129,6 +129,13 @@ fn set_touch(pulsar: State<Pulsar>, touch: Touch) -> Result<(), String> {
     Ok(())
 }
 
+/// While practicing with wrong keys silent: only these keyboard keys sound (`None`: all of them).
+#[tauri::command]
+fn set_key_filter(pulsar: State<Pulsar>, keys: Option<Vec<u8>>) -> Result<(), String> {
+    pulsar.engine()?.set_key_filter(keys.as_deref());
+    Ok(())
+}
+
 #[tauri::command]
 fn open_sounds_folder(app: AppHandle, pulsar: State<Pulsar>) -> Result<(), String> {
     let dir = pulsar.engine()?.status().sounds_dir;
@@ -325,6 +332,7 @@ pub fn run() {
             pedal,
             set_volume,
             set_touch,
+            set_key_filter,
             open_sounds_folder,
             check_update,
             install_update,

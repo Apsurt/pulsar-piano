@@ -11,7 +11,7 @@ use midir::{Ignore, MidiInput, MidiInputConnection};
 use rtrb::{Consumer, Producer};
 use serde::Serialize;
 
-use crate::{EngineEvent, Instrument, MidiEvent, Source, Touch};
+use crate::{EngineEvent, Instrument, KeyFilter, MidiEvent, Source, Touch};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MidiDevice {
@@ -48,6 +48,7 @@ pub(crate) fn spawn_housekeeping(
     mut garbage: Consumer<Box<dyn Instrument>>,
     devices: Arc<Mutex<Vec<MidiDevice>>>,
     touch: Arc<AtomicU8>,
+    filter: Arc<KeyFilter>,
     stop: mpsc::Receiver<()>,
 ) {
     let _ = thread::Builder::new()
@@ -76,6 +77,7 @@ pub(crate) fn spawn_housekeeping(
                             input.clone(),
                             events.clone(),
                             touch.clone(),
+                            filter.clone(),
                         )
                     {
                         connections.push((name.clone(), conn));
@@ -110,6 +112,7 @@ fn connect(
     input: Arc<Mutex<Producer<MidiEvent>>>,
     events: mpsc::Sender<EngineEvent>,
     touch: Arc<AtomicU8>,
+    filter: Arc<KeyFilter>,
 ) -> Option<MidiInputConnection<()>> {
     let mut midi = MidiInput::new("Pulsar").ok()?;
     midi.ignore(Ignore::All);
@@ -124,10 +127,15 @@ fn connect(
         "pulsar-in",
         move |_, bytes, _| {
             if let Some(mut event) = MidiEvent::parse(bytes) {
-                if let MidiEvent::NoteOn { velocity, .. } = &mut event
+                if let MidiEvent::NoteOn { key, velocity, .. } = &mut event
                     && source == Source::Device
                 {
                     *velocity = Touch::from_u8(touch.load(Ordering::Relaxed)).apply(*velocity);
+                    // A key the app isn't expecting: the UI still sees it, but it makes no sound.
+                    if *velocity > 0 && !filter.allows(*key) {
+                        let _ = events.send(EngineEvent::Midi(event, source));
+                        return;
+                    }
                 }
                 dispatch(&input, &events, event, source);
             }

@@ -36,6 +36,8 @@ export const engine = {
   pedal: (down: boolean) => invoke("pedal", { down }),
   setVolume: (db: number) => invoke("set_volume", { db }),
   setTouch: (touch: Touch) => invoke("set_touch", { touch }),
+  /** Only these keyboard keys make sound (null: all). Presses of other keys are still reported. */
+  setKeyFilter: (keys: number[] | null) => invoke("set_key_filter", { keys }),
   openSoundsFolder: () => invoke("open_sounds_folder"),
   checkUpdate: () => invoke<string | null>("check_update"),
   installUpdate: () => invoke("install_update"),

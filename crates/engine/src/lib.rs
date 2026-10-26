@@ -7,6 +7,7 @@ mod audio;
 mod event;
 mod instrument;
 pub mod instruments;
+mod key_filter;
 mod library;
 mod midi_in;
 mod touch;
@@ -21,6 +22,7 @@ use serde::Serialize;
 use audio::{AudioCommand, AudioHandle, AudioStats, Renderer};
 pub use event::{CC_SUSTAIN, MidiEvent};
 pub use instrument::Instrument;
+pub use key_filter::KeyFilter;
 pub use library::InstrumentInfo;
 pub use midi_in::MidiDevice;
 pub use touch::Touch;
@@ -75,6 +77,8 @@ pub struct Engine {
     volume_db: AtomicU32,
     /// A `Touch`, shared with the MIDI callbacks.
     touch: Arc<AtomicU8>,
+    /// Which keyboard notes may sound, shared with the MIDI callbacks.
+    filter: Arc<KeyFilter>,
     loading: Mutex<()>,
     _housekeeping: mpsc::Sender<()>,
 }
@@ -94,12 +98,14 @@ impl Engine {
         let devices = Arc::new(Mutex::new(Vec::new()));
         let (housekeeping, housekeeping_stop) = mpsc::channel();
         let touch = Arc::new(AtomicU8::new(Touch::default().to_u8()));
+        let filter = Arc::new(KeyFilter::default());
         midi_in::spawn_housekeeping(
             input.clone(),
             events.clone(),
             garbage_rx,
             devices.clone(),
             touch.clone(),
+            filter.clone(),
             housekeeping_stop,
         );
 
@@ -114,6 +120,7 @@ impl Engine {
             current: Mutex::new(None),
             volume_db: AtomicU32::new(0f32.to_bits()),
             touch,
+            filter,
             loading: Mutex::new(()),
             _housekeeping: housekeeping,
         };
@@ -170,6 +177,12 @@ impl Engine {
     /// How keyboard velocity maps to loudness, from the next note on.
     pub fn set_touch(&self, touch: Touch) {
         self.touch.store(touch.to_u8(), Ordering::Relaxed);
+    }
+
+    /// Lets only these keyboard keys sound (`None`: all of them). Other presses are still reported.
+    /// Releases always pass, and notes the app sends itself are never filtered.
+    pub fn set_key_filter(&self, keys: Option<&[u8]>) {
+        self.filter.set(keys);
     }
 
     /// 0 dB is unity; -60 dB or lower is silence.

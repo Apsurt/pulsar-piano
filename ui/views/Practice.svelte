@@ -20,12 +20,15 @@
   practice.loop = practicePrefs.loop;
   // svelte-ignore state_referenced_locally
   practice.setPlayed(practicePrefs.tracks[songId] ?? []);
+  // svelte-ignore state_referenced_locally
+  practice.setHeard(practicePrefs.heard[songId] ?? []);
   practice.accompany = practicePrefs.accompany;
   // Notes Pulsar plays (listen mode, accompaniment) go to the synth like any other.
   practice.sound = (key, velocity) => engine.note(key, velocity);
   live.practice = practice;
   onDestroy(() => {
     practice.silence();
+    engine.setKeyFilter(null).catch(() => {});
     // The next screen may already have its own practice running.
     if (live.practice === practice) live.practice = null;
   });
@@ -40,10 +43,16 @@
   let speed = $state(1);
   let mode = $state<Mode>("wait");
   let played = $state([...practice.played].sort((a, b) => a - b));
+  let heard = $state([...practice.heard].sort((a, b) => a - b));
+  /** The track choice on screen: what you play, or when listening, what you hear. */
+  const selection = $derived(mode === "listen" ? heard : played);
   let view = $state<SongView>(live.songView);
   let optionsOpen = $state(false);
   let loop = $state(practice.loop);
   let accompany = $state(practice.accompany);
+  let muteWrong = $state(practicePrefs.muteWrong);
+  /** The key filter last sent to the engine ("all" when off), so it's only sent when it changes. */
+  let sentFilter = "all";
   let leadIn = $state(practice.leadIn);
   let passes = $state(0);
   let lastScore = $state<number | null>(null);
@@ -72,6 +81,13 @@
       wrong = practice.wrong;
       passes = practice.passes;
       lastScore = practice.lastScore;
+      // Wrong keys silent: the engine only lets the keys due now sound.
+      const keys = muteWrong ? practice.soundKeys() : null;
+      const filter = keys ? keys.join(",") : "all";
+      if (filter !== sentFilter) {
+        sentFilter = filter;
+        engine.setKeyFilter(keys).catch(() => {});
+      }
       raf = requestAnimationFrame(tick);
     });
     return () => {
@@ -122,6 +138,11 @@
     total = practice.total;
   }
 
+  function setMuteWrong(on: boolean) {
+    muteWrong = practicePrefs.muteWrong = on;
+    savePracticePrefs();
+  }
+
   function setAccompany(on: boolean) {
     accompany = practice.accompany = practicePrefs.accompany = on;
     savePracticePrefs();
@@ -131,15 +152,21 @@
   const playable = practice.tracks.flatMap((t, i) => (t.notes ? [i] : []));
   const playingAny = (tracks: number[]) => tracks.some((t) => playable.includes(t));
 
-  /** Turns a track on or off; the last one with notes stays on. */
+  /** Turns a track on or off (to play, or to hear when listening); the last one with notes stays on. */
   function toggleTrack(track: number) {
-    const next = played.includes(track) ? played.filter((t) => t !== track) : [...played, track];
+    const next = selection.includes(track) ? selection.filter((t) => t !== track) : [...selection, track];
     if (!playingAny(next)) return;
-    practice.setPlayed(next);
-    played = [...practice.played].sort((a, b) => a - b);
+    const listening = mode === "listen";
+    if (listening) practice.setHeard(next);
+    else practice.setPlayed(next);
+    const chosen = [...(listening ? practice.heard : practice.played)].sort((a, b) => a - b);
+    if (listening) heard = chosen;
+    else played = chosen;
     total = practice.total;
-    if (played.length === practice.tracks.length) delete practicePrefs.tracks[songId];
-    else practicePrefs.tracks[songId] = played;
+    // Remembered per song; every track on is the default, so it isn't stored.
+    const prefs = listening ? practicePrefs.heard : practicePrefs.tracks;
+    if (chosen.length === practice.tracks.length) delete prefs[songId];
+    else prefs[songId] = chosen;
     savePracticePrefs();
   }
 
@@ -195,17 +222,18 @@
                 ]}
               />
               {#if mode === "listen"}
-                <span class="hint dim">Pulsar plays the whole song for you</span>
+                <span class="hint dim">Pulsar plays the song for you</span>
               {/if}
             </div>
-            {#if playable.length > 1 && mode !== "listen"}
+            {#if playable.length > 1}
+              {@const label = mode === "listen" ? "Tracks to hear" : "Tracks you play"}
               <div class="field">
-                <span class="label">Tracks you play</span>
-                <div class="tracks" role="group" aria-label="Tracks you play">
+                <span class="label">{label}</span>
+                <div class="tracks" role="group" aria-label={label}>
                   {#each playable as i (i)}
                     {@const track = practice.tracks[i]}
-                    {@const on = played.includes(i)}
-                    {@const last = on && !playingAny(played.filter((t) => t !== i))}
+                    {@const on = selection.includes(i)}
+                    {@const last = on && !playingAny(selection.filter((t) => t !== i))}
                     <button
                       class="track"
                       class:on
@@ -221,7 +249,7 @@
                   {/each}
                 </div>
               </div>
-              {#if playable.some((t) => !played.includes(t))}
+              {#if mode !== "listen" && playable.some((t) => !played.includes(t))}
                 <div class="field">
                   <span class="label">The tracks you don't play</span>
                   <Segmented
@@ -229,12 +257,26 @@
                     value={accompany ? "play" : "show"}
                     onchange={(v) => setAccompany(v === "play")}
                     options={[
-                      { value: "show", label: "Just show them" },
+                      { value: "show", label: "Leave them out" },
                       { value: "play", label: "Pulsar plays them" },
                     ]}
                   />
                 </div>
               {/if}
+            {/if}
+            {#if mode !== "listen"}
+              <div class="field">
+                <span class="label">Wrong keys <span class="dim">(on your keyboard)</span></span>
+                <Segmented
+                  label="Wrong keys"
+                  value={muteWrong ? "silent" : "sound"}
+                  onchange={(v) => setMuteWrong(v === "silent")}
+                  options={[
+                    { value: "sound", label: "Make a sound" },
+                    { value: "silent", label: "Silent" },
+                  ]}
+                />
+              </div>
             {/if}
             <div class="field">
               <span class="label">Show</span>
