@@ -9,8 +9,8 @@ export type PracticeNote = { key: number; start: number; end: number; hand: Hand
 /** Notes that start together: a chord, or a single note. */
 export type Chord = { start: number; notes: PracticeNote[] };
 
-/** Seconds shown before the first note, so it can fall into view. */
-const LEAD_IN = 2;
+/** Default real seconds from pressing play to the first note. */
+export const DEFAULT_LEAD_IN = 2;
 /** Notes starting within this many seconds of each other form one chord. */
 const CHORD_SPREAD = 0.03;
 /** Tempo mode: how far (real seconds) from a note's start a press still counts. */
@@ -24,13 +24,21 @@ export class Practice {
   readonly bars: number[];
   readonly duration: number;
   readonly hasHands: boolean;
-  readonly startTime: number;
+  /** When the first note starts, in song seconds. */
+  private readonly firstNote: number;
 
   /** Song position in seconds (at 100% speed). Negative during the lead-in. */
   time: number;
   playing = false;
   finished = false;
   speed = 1;
+  /** Real seconds between pressing play and the first note. */
+  leadIn: number;
+  /** Start over by itself at the end. */
+  loop = false;
+  /** Times the song has been played through, and the score of the last full pass. */
+  passes = 0;
+  lastScore: number | null = null;
   mode: Mode = "wait";
   hands: Hands = "both";
   hits = 0;
@@ -41,7 +49,7 @@ export class Practice {
   /** First chord not yet finished (wait mode) or not yet passed (tempo mode). */
   private cursor = 0;
 
-  constructor(song: Song) {
+  constructor(song: Song, leadIn = DEFAULT_LEAD_IN) {
     this.notes = song.notes.map((n) => ({
       key: n.key,
       start: secondsAt(song, n.start),
@@ -59,8 +67,30 @@ export class Practice {
     this.bars = barTimes(song, endBeat);
     this.duration = Math.max(0, ...this.notes.map((n) => n.end));
     this.hasHands = this.notes.some((n) => n.hand !== null);
-    this.startTime = (this.chords[0]?.start ?? 0) - LEAD_IN;
+    this.firstNote = this.chords[0]?.start ?? 0;
+    this.leadIn = Math.max(0, leadIn);
     this.time = this.startTime;
+  }
+
+  /** Where playback begins: the lead-in before the first note, in song seconds at the current speed. */
+  get startTime(): number {
+    return this.firstNote - this.leadIn * this.speed;
+  }
+
+  private get atStart(): boolean {
+    return !this.playing && this.time <= this.startTime + 1e-6;
+  }
+
+  setSpeed(speed: number) {
+    const atStart = this.atStart;
+    this.speed = speed;
+    if (atStart) this.time = this.startTime;
+  }
+
+  setLeadIn(seconds: number) {
+    const atStart = this.atStart;
+    this.leadIn = Math.max(0, seconds);
+    if (atStart) this.time = this.startTime;
   }
 
   isActive(note: PracticeNote): boolean {
@@ -93,30 +123,34 @@ export class Practice {
     }
     this.time = next;
     if (this.time >= this.duration + 0.5) {
-      this.playing = false;
-      this.finished = true;
+      this.passes++;
+      this.lastScore = this.total ? Math.round((this.hits / this.total) * 100) : 0;
+      if (this.loop) {
+        this.restart();
+        this.playing = true;
+      } else {
+        this.playing = false;
+        this.finished = true;
+      }
     }
   }
 
-  /** A key went down (from any source). */
+  /** A key went down (from any source). Ignored while paused: only play/pause starts the song. */
   press(key: number) {
-    if (this.finished) return;
+    if (this.finished || !this.playing) return;
     if (this.mode === "wait") {
       const chord = this.nextChord();
       if (!chord) return;
-      // While paused any distance counts, so playing the first chord's notes starts the song.
-      const soon = !this.playing || (chord.start - this.time) / this.speed <= EARLY;
+      const soon = (chord.start - this.time) / this.speed <= EARLY;
       const note = soon && chord.notes.find((n) => n.key === key && this.isActive(n) && n.state === "pending");
       if (note) {
         note.state = "hit";
         this.hits++;
-        this.playing = true;
-      } else if (this.playing) {
+      } else {
         this.miss(key);
       }
       return;
     }
-    if (!this.playing) return;
     let best: PracticeNote | null = null;
     let distance = HIT_WINDOW * this.speed;
     for (const n of this.notes) {

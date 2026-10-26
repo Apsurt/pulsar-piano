@@ -1,5 +1,5 @@
 // App-wide state the screens share: sound, MIDI status, what's being played, navigation and messages.
-import { engine, type InstrumentInfo, type MidiDevice } from "./engine";
+import { engine, type InstrumentInfo, type MidiDevice, type Touch } from "./engine";
 import { songs, type Song } from "./songs";
 
 export const sound = $state({
@@ -7,6 +7,7 @@ export const sound = $state({
   current: null as string | null,
   loading: null as string | null,
   volume: 0,
+  touch: "normal" as Touch,
 });
 
 export const status = $state({
@@ -29,6 +30,29 @@ export const played = $state({
 
 /** Computer-keyboard playing: the octave, and when the keys were last used (to show a hint briefly). */
 export const computerKeys = $state({ octave: 4, usedAt: 0 });
+
+// ---- Practice preferences, kept between songs and launches ----------------------------------
+
+const PRACTICE_PREFS = "pulsar.practice";
+
+function loadPracticePrefs(): { loop: boolean; leadIn: number } {
+  const defaults = { loop: false, leadIn: 2 };
+  try {
+    return { ...defaults, ...JSON.parse(localStorage.getItem(PRACTICE_PREFS) ?? "{}") };
+  } catch {
+    return defaults;
+  }
+}
+
+export const practicePrefs = $state(loadPracticePrefs());
+
+export function savePracticePrefs() {
+  try {
+    localStorage.setItem(PRACTICE_PREFS, JSON.stringify(practicePrefs));
+  } catch {
+    // Only a convenience; practice works with the defaults.
+  }
+}
 
 /** Bumped whenever the song list may have changed. */
 export const library = $state({ version: 0 });
@@ -61,6 +85,11 @@ export function chooseInstrument(id: string) {
 export function setVolume(db: number) {
   sound.volume = db;
   engine.setVolume(db);
+}
+
+export function setTouch(touch: Touch) {
+  sound.touch = touch;
+  engine.setTouch(touch).catch((e) => showError(String(e)));
 }
 
 // ---- Navigation: a stack of screens; you go into things and back out -------------------------

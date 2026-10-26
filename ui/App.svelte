@@ -10,7 +10,7 @@
   import { live, press, release, heldCount } from "./lib/live";
   import { COMPUTER_KEYS } from "./lib/keyboard";
   import { songs } from "./lib/songs";
-  import { actionFor, fire } from "./lib/controls";
+  import { actionFor, faderFor, fire, moveFader } from "./lib/controls";
   import {
     computerKeys,
     library,
@@ -59,7 +59,9 @@
     } else if (e.code === "Space") {
       e.preventDefault();
       (document.activeElement as HTMLElement | null)?.blur();
-      engine.pedal(true);
+      // While practicing, Space is play/pause (like the ▶ pad); everywhere else it's the sustain pedal.
+      if (nav.route.name === "practice") fire("play");
+      else engine.pedal(true);
     } else if (e.code === "KeyZ" || e.code === "KeyX") {
       computerKeys.octave = Math.min(7, Math.max(0, computerKeys.octave + (e.code === "KeyX" ? 1 : -1)));
       computerKeys.usedAt = Date.now();
@@ -72,7 +74,7 @@
   }
 
   function keyup(e: KeyboardEvent) {
-    if (e.code === "Space") engine.pedal(false);
+    if (e.code === "Space" && nav.route.name !== "practice") engine.pedal(false);
     const key = down.get(e.code);
     if (key !== undefined) {
       down.delete(e.code);
@@ -99,9 +101,14 @@
         played.held = heldCount();
         live.noteListener?.(key, velocity);
       }),
-      engine.onControl(({ controller, value }) => {
-        const action = actionFor(controller, value);
-        if (action) fire(action);
+      engine.onControl(({ controller, value, port }) => {
+        if (port === "control") {
+          const action = actionFor(controller, value);
+          if (action) fire(action);
+          return;
+        }
+        const fader = faderFor(controller);
+        if (fader) moveFader(fader, value / 127);
       }),
       engine.onPedal((isDown) => (live.sustain = played.sustain = isDown)),
       engine.onDevices((devices) => (status.devices = devices)),
@@ -130,6 +137,7 @@
         status.latency = s.latency_ms;
         sound.current ??= s.instrument?.id ?? null;
         sound.volume = s.volume_db;
+        sound.touch = s.touch;
       })
       .catch((e) => (status.fatal = String(e)));
     refreshInstruments();

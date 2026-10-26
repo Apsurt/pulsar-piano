@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use pulsar_engine::Touch;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -10,6 +11,7 @@ pub struct Settings {
     /// Id of the last instrument played, restored on launch.
     pub instrument: Option<String>,
     pub volume_db: f32,
+    pub touch: Touch,
 }
 
 impl Settings {

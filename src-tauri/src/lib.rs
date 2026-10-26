@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
-use pulsar_engine::{CC_SUSTAIN, Engine, EngineEvent, InstrumentInfo, MidiEvent, Source, Status};
+use pulsar_engine::{
+    CC_SUSTAIN, Engine, EngineEvent, InstrumentInfo, MidiEvent, Source, Status, Touch,
+};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -44,11 +46,14 @@ struct Note {
     device: bool,
 }
 
-/// A control-port CC, e.g. a transport pad (127 pressed, 0 released).
+/// A CC for the UI to act on: a transport pad on the control port (127 pressed, 0 released),
+/// or a fader/knob on the keyboard port.
 #[derive(Clone, Serialize)]
 struct Control {
     controller: u8,
     value: u8,
+    /// "control" or "keyboard".
+    port: &'static str,
 }
 
 #[derive(Clone, Serialize)]
@@ -116,6 +121,14 @@ fn set_volume(pulsar: State<Pulsar>, db: f32) -> Result<(), String> {
     Ok(())
 }
 
+/// How hard the keys need to be played: light, normal, heavy or fixed.
+#[tauri::command]
+fn set_touch(pulsar: State<Pulsar>, touch: Touch) -> Result<(), String> {
+    pulsar.engine()?.set_touch(touch);
+    pulsar.update_settings(|s| s.touch = touch);
+    Ok(())
+}
+
 #[tauri::command]
 fn open_sounds_folder(app: AppHandle, pulsar: State<Pulsar>) -> Result<(), String> {
     let dir = pulsar.engine()?.status().sounds_dir;
@@ -169,8 +182,22 @@ fn forward_events(app: AppHandle, events: Receiver<EngineEvent>) {
                     MidiEvent::ControlChange {
                         controller, value, ..
                     },
-                    Source::Control,
-                ) => app.emit("control", Control { controller, value }),
+                    source @ (Source::Control | Source::Device),
+                ) if controller != CC_SUSTAIN => {
+                    let port = if source == Source::Control {
+                        "control"
+                    } else {
+                        "keyboard"
+                    };
+                    app.emit(
+                        "control",
+                        Control {
+                            controller,
+                            value,
+                            port,
+                        },
+                    )
+                }
                 EngineEvent::Midi(_, Source::Control) => Ok(()),
                 EngineEvent::Midi(MidiEvent::NoteOn { key, velocity, .. }, source) => {
                     let device = source == Source::Device;
@@ -276,6 +303,7 @@ pub fn run() {
                 let engine = Arc::new(engine);
                 forward_events(app.handle().clone(), events);
                 engine.set_volume_db(settings.volume_db);
+                engine.set_touch(settings.touch);
                 restore_instrument(engine.clone(), settings.instrument.clone());
                 engine
             });
@@ -296,6 +324,7 @@ pub fn run() {
             note,
             pedal,
             set_volume,
+            set_touch,
             open_sounds_folder,
             check_update,
             install_update,

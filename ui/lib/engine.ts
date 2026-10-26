@@ -12,7 +12,10 @@ export type Status = {
   devices: MidiDevice[];
   instrument: InstrumentInfo | null;
   sounds_dir: string;
+  touch: Touch;
 };
+/** How keyboard velocity maps to loudness. */
+export type Touch = "light" | "normal" | "heavy" | "fixed";
 export type InstrumentState = {
   state: "loading" | "ready" | "failed";
   instrument: InstrumentInfo;
@@ -32,6 +35,7 @@ export const engine = {
   note: (key: number, velocity: number) => invoke("note", { key, velocity }),
   pedal: (down: boolean) => invoke("pedal", { down }),
   setVolume: (db: number) => invoke("set_volume", { db }),
+  setTouch: (touch: Touch) => invoke("set_touch", { touch }),
   openSoundsFolder: () => invoke("open_sounds_folder"),
   checkUpdate: () => invoke<string | null>("check_update"),
   installUpdate: () => invoke("install_update"),
@@ -40,6 +44,7 @@ export const engine = {
   onPedal: (cb: (down: boolean) => void) => on("pedal", cb),
   onDevices: (cb: (devices: MidiDevice[]) => void) => on("devices", cb),
   onInstrument: (cb: (state: InstrumentState) => void) => on("instrument", cb),
-  /** CCs from a controller's control port (transport pads). */
-  onControl: (cb: (control: { controller: number; value: number }) => void) => on("control", cb),
+  /** CCs to act on: transport pads ("control" port) and faders/knobs ("keyboard" port). */
+  onControl: (cb: (control: { controller: number; value: number; port: "control" | "keyboard" }) => void) =>
+    on("control", cb),
 };

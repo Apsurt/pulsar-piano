@@ -23,3 +23,40 @@ export function onAction(fn: (action: Action) => void): () => void {
 export function fire(action: Action) {
   handler?.(action);
 }
+
+// ---- Knobs and faders: continuous controls on the keyboard port ----------------------------
+//
+// MiniLab 37, Arturia preset (measured): everything below is on the "MIDI" port, absolute 0–127.
+//   knobs 1–8   CC 74, 71, 76, 77, 93, 18, 19, 16   (93 is also "chorus send" to SoundFonts)
+//   faders 1–4  CC 82, 83, 85, 17
+//   left strip  pitch bend (14-bit, springs back to centre), handled by the instrument
+//   right strip CC 1 (mod wheel), handled by the instrument
+
+const MINILAB_KNOBS: Record<number, number> = { 74: 1, 71: 2, 76: 3, 77: 4, 93: 5, 18: 6, 19: 7, 16: 8 };
+
+/** The knob number (1–8) for a keyboard-port CC, if it is one. Not assigned to anything yet. */
+export function knobFor(controller: number): number | null {
+  return MINILAB_KNOBS[controller] ?? null;
+}
+
+/** MiniLab 37 faders 1–4 in its Arturia preset (CC on the "MIDI" port, 0 bottom to 127 top). */
+const MINILAB_FADERS: Record<number, number> = { 82: 1, 83: 2, 85: 3, 17: 4 };
+
+/** The fader number (1–4) for a keyboard-port CC, if it is one. */
+export function faderFor(controller: number): number | null {
+  return MINILAB_FADERS[controller] ?? null;
+}
+
+let faderHandler: ((fader: number, value: number) => void) | null = null;
+
+/** `value` is 0 (bottom) to 1 (top). One view at a time; returns an unsubscribe for onMount. */
+export function onFader(fn: (fader: number, value: number) => void): () => void {
+  faderHandler = fn;
+  return () => {
+    if (faderHandler === fn) faderHandler = null;
+  };
+}
+
+export function moveFader(fader: number, value: number) {
+  faderHandler?.(fader, value);
+}

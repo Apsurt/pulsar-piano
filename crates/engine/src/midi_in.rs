@@ -1,6 +1,7 @@
 //! MIDI input. midir can't report hot-plugging, so a housekeeping thread polls the port list every second
 //! and connects to every input it finds. It also frees instruments the audio thread has swapped out.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -10,7 +11,7 @@ use midir::{Ignore, MidiInput, MidiInputConnection};
 use rtrb::{Consumer, Producer};
 use serde::Serialize;
 
-use crate::{EngineEvent, Instrument, MidiEvent, Source};
+use crate::{EngineEvent, Instrument, MidiEvent, Source, Touch};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MidiDevice {
@@ -46,6 +47,7 @@ pub(crate) fn spawn_housekeeping(
     events: mpsc::Sender<EngineEvent>,
     mut garbage: Consumer<Box<dyn Instrument>>,
     devices: Arc<Mutex<Vec<MidiDevice>>>,
+    touch: Arc<AtomicU8>,
     stop: mpsc::Receiver<()>,
 ) {
     let _ = thread::Builder::new()
@@ -68,8 +70,13 @@ pub(crate) fn spawn_housekeeping(
                 connections.retain(|(name, _)| ports.iter().any(|(n, _)| n == name));
                 for (name, id) in &ports {
                     if !connections.iter().any(|(n, _)| n == name)
-                        && let Some(conn) =
-                            connect(id, is_control_port(name), input.clone(), events.clone())
+                        && let Some(conn) = connect(
+                            id,
+                            is_control_port(name),
+                            input.clone(),
+                            events.clone(),
+                            touch.clone(),
+                        )
                     {
                         connections.push((name.clone(), conn));
                     }
@@ -102,6 +109,7 @@ fn connect(
     control: bool,
     input: Arc<Mutex<Producer<MidiEvent>>>,
     events: mpsc::Sender<EngineEvent>,
+    touch: Arc<AtomicU8>,
 ) -> Option<MidiInputConnection<()>> {
     let mut midi = MidiInput::new("Pulsar").ok()?;
     midi.ignore(Ignore::All);
@@ -115,7 +123,12 @@ fn connect(
         &port,
         "pulsar-in",
         move |_, bytes, _| {
-            if let Some(event) = MidiEvent::parse(bytes) {
+            if let Some(mut event) = MidiEvent::parse(bytes) {
+                if let MidiEvent::NoteOn { velocity, .. } = &mut event
+                    && source == Source::Device
+                {
+                    *velocity = Touch::from_u8(touch.load(Ordering::Relaxed)).apply(*velocity);
+                }
                 dispatch(&input, &events, event, source);
             }
         },

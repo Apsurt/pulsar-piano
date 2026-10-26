@@ -9,9 +9,10 @@ mod instrument;
 pub mod instruments;
 mod library;
 mod midi_in;
+mod touch;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 use rtrb::{Producer, RingBuffer};
@@ -22,6 +23,7 @@ pub use event::{CC_SUSTAIN, MidiEvent};
 pub use instrument::Instrument;
 pub use library::InstrumentInfo;
 pub use midi_in::MidiDevice;
+pub use touch::Touch;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -58,6 +60,7 @@ pub struct Status {
     pub devices: Vec<MidiDevice>,
     pub instrument: Option<InstrumentInfo>,
     pub sounds_dir: PathBuf,
+    pub touch: Touch,
 }
 
 pub struct Engine {
@@ -70,6 +73,8 @@ pub struct Engine {
     devices: Arc<Mutex<Vec<MidiDevice>>>,
     current: Mutex<Option<InstrumentInfo>>,
     volume_db: AtomicU32,
+    /// A `Touch`, shared with the MIDI callbacks.
+    touch: Arc<AtomicU8>,
     loading: Mutex<()>,
     _housekeeping: mpsc::Sender<()>,
 }
@@ -88,11 +93,13 @@ impl Engine {
         let input = Arc::new(Mutex::new(input));
         let devices = Arc::new(Mutex::new(Vec::new()));
         let (housekeeping, housekeeping_stop) = mpsc::channel();
+        let touch = Arc::new(AtomicU8::new(Touch::default().to_u8()));
         midi_in::spawn_housekeeping(
             input.clone(),
             events.clone(),
             garbage_rx,
             devices.clone(),
+            touch.clone(),
             housekeeping_stop,
         );
 
@@ -106,6 +113,7 @@ impl Engine {
             devices,
             current: Mutex::new(None),
             volume_db: AtomicU32::new(0f32.to_bits()),
+            touch,
             loading: Mutex::new(()),
             _housekeeping: housekeeping,
         };
@@ -159,6 +167,11 @@ impl Engine {
         }
     }
 
+    /// How keyboard velocity maps to loudness, from the next note on.
+    pub fn set_touch(&self, touch: Touch) {
+        self.touch.store(touch.to_u8(), Ordering::Relaxed);
+    }
+
     /// 0 dB is unity; -60 dB or lower is silence.
     pub fn set_volume_db(&self, db: f32) {
         let db = db.clamp(-60.0, 6.0);
@@ -182,6 +195,7 @@ impl Engine {
             devices: self.devices.lock().map(|d| d.clone()).unwrap_or_default(),
             instrument: self.current.lock().ok().and_then(|c| c.clone()),
             sounds_dir: self.sounds_dir.clone(),
+            touch: Touch::from_u8(self.touch.load(Ordering::Relaxed)),
         }
     }
 }

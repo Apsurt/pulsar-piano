@@ -1,7 +1,15 @@
 <script lang="ts">
   // Pick the instrument and set the volume. Used in sheets and in Settings.
-  import { chooseInstrument, setVolume, sound } from "./app.svelte";
+  import Segmented from "./Segmented.svelte";
+  import { chooseInstrument, played, setTouch, setVolume, sound } from "./app.svelte";
   import { engine } from "./engine";
+
+  const touchHelp = {
+    light: "Soft presses come out louder. Good for light keys and weak fingers.",
+    normal: "Exactly what your keyboard sends.",
+    heavy: "You have to play harder to get loud.",
+    fixed: "Every note at the same loudness.",
+  };
 </script>
 
 <div class="panel">
@@ -23,6 +31,27 @@
     {/each}
   </div>
   <button class="add" onclick={() => engine.openSoundsFolder()}>Add sounds… <span>(drop .sf2 files in the folder)</span></button>
+
+  <div class="touch">
+    <div class="touch-row">
+      <span>Touch</span>
+      <Segmented
+        label="Touch sensitivity"
+        value={sound.touch}
+        onchange={setTouch}
+        options={[
+          { value: "light", label: "Light" },
+          { value: "normal", label: "Normal" },
+          { value: "heavy", label: "Heavy" },
+          { value: "fixed", label: "Fixed" },
+        ]}
+      />
+    </div>
+    <div class="touch-help">
+      {touchHelp[sound.touch]}
+      {#if played.lastNote}<span class="mono">Last note: vel {played.lastNote.velocity}</span>{/if}
+    </div>
+  </div>
 
   <label class="volume">
     <span>Volume</span>
@@ -99,6 +128,29 @@
   .add span {
     color: var(--mist);
     font-size: 12px;
+  }
+  .touch {
+    display: grid;
+    gap: 8px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .touch-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .touch-help {
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--mist);
+  }
+  .touch-help .mono {
+    color: var(--tint);
   }
   .volume {
     display: flex;

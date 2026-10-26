@@ -5,9 +5,8 @@
   import Segmented from "../lib/Segmented.svelte";
   import Sheet from "../lib/Sheet.svelte";
   import TopBar from "../lib/TopBar.svelte";
-  import { nav, openEditor } from "../lib/app.svelte";
-  import { onAction } from "../lib/controls";
-  import { noteName } from "../lib/keyboard";
+  import { nav, openEditor, practicePrefs, savePracticePrefs } from "../lib/app.svelte";
+  import { onAction, onFader } from "../lib/controls";
   import { live, type SongView } from "../lib/live";
   import { Practice, type Hands, type Mode } from "../lib/practice";
   import type { Song } from "../lib/songs";
@@ -16,7 +15,8 @@
 
   // A new screen is created per song, so the song is fixed for its lifetime.
   // svelte-ignore state_referenced_locally
-  const practice = new Practice(song);
+  const practice = new Practice(song, practicePrefs.leadIn);
+  practice.loop = practicePrefs.loop;
   live.practice = practice;
   onDestroy(() => {
     // The next screen may already have its own practice running.
@@ -30,30 +30,31 @@
   let hits = $state(0);
   let wrong = $state(0);
   let total = $state(practice.total);
-  let next = $state("");
   let speed = $state(1);
   let mode = $state<Mode>("wait");
   let hands = $state<Hands>("both");
   let view = $state<SongView>(live.songView);
   let optionsOpen = $state(false);
-
-  /** Names of the first chord still to play, e.g. "C4 E4". */
-  function upcoming(): string {
-    const chord = practice.chords.find(
-      (c) => c.start >= practice.time - 0.05 && c.notes.some((n) => practice.isActive(n) && n.state === "pending"),
-    );
-    return chord
-      ? chord.notes
-          .filter((n) => practice.isActive(n))
-          .map((n) => noteName(n.key))
-          .join(" ")
-      : "";
-  }
+  let loop = $state(practice.loop);
+  let leadIn = $state(practice.leadIn);
+  let passes = $state(0);
+  let lastScore = $state<number | null>(null);
 
   onMount(() => {
     const stopPads = onAction((action) => {
       if (action === "play") toggle();
       else if (action === "stop") practice.restart();
+      else if (action === "loop") setLoop(!loop);
+    });
+    // Fader 1: speed, fader 2: lead-in.
+    const stopFaders = onFader((fader, value) => {
+      if (fader === 1) {
+        setSpeed(0.25 + value * 1.25);
+        show(`Speed ${Math.round(speed * 100)}%`);
+      } else if (fader === 2) {
+        setLeadIn(value * 10);
+        show(`Lead-in ${leadIn} s`);
+      }
     });
     let raf = requestAnimationFrame(function tick() {
       time = practice.time;
@@ -61,23 +62,50 @@
       finished = practice.finished;
       hits = practice.hits;
       wrong = practice.wrong;
-      if (!playing) next = upcoming();
+      passes = practice.passes;
+      lastScore = practice.lastScore;
       raf = requestAnimationFrame(tick);
     });
     return () => {
       stopPads();
+      stopFaders();
       cancelAnimationFrame(raf);
     };
   });
+
+  /** A value being adjusted from the keyboard, shown briefly in the corner. */
+  let adjusting = $state<string | null>(null);
+  let adjustingTimer: ReturnType<typeof setTimeout>;
+  function show(text: string) {
+    adjusting = text;
+    clearTimeout(adjustingTimer);
+    adjustingTimer = setTimeout(() => (adjusting = null), 1200);
+  }
 
   function toggle() {
     if (practice.finished) practice.restart();
     practice.playing = !practice.playing;
   }
 
-  function nudgeSpeed(delta: number) {
-    speed = Math.min(1.5, Math.max(0.25, Math.round((speed + delta) * 20) / 20));
-    practice.speed = speed;
+  /** 25–150%, in 5% steps. */
+  function setSpeed(value: number) {
+    speed = Math.min(1.5, Math.max(0.25, Math.round(value * 20) / 20));
+    practice.setSpeed(speed);
+  }
+
+  function setLoop(on: boolean) {
+    loop = practice.loop = practicePrefs.loop = on;
+    savePracticePrefs();
+  }
+
+  /** 0–10 whole seconds. */
+  function setLeadIn(value: number) {
+    const next = Math.min(10, Math.max(0, Math.round(value)));
+    if (next === leadIn) return;
+    leadIn = next;
+    practice.setLeadIn(leadIn);
+    practicePrefs.leadIn = leadIn;
+    savePracticePrefs();
   }
 
   function setMode(m: Mode) {
@@ -170,12 +198,32 @@
               />
             </div>
             <div class="field">
-              <span class="label">Speed</span>
+              <span class="label">Speed <span class="dim">(fader 1)</span></span>
               <div class="stepper" role="group" aria-label="Speed">
-                <button onclick={() => nudgeSpeed(-0.05)} aria-label="Slower">−</button>
+                <button onclick={() => setSpeed(speed - 0.05)} aria-label="Slower">−</button>
                 <span class="mono">{Math.round(speed * 100)}%</span>
-                <button onclick={() => nudgeSpeed(0.05)} aria-label="Faster">+</button>
+                <button onclick={() => setSpeed(speed + 0.05)} aria-label="Faster">+</button>
               </div>
+            </div>
+            <div class="field">
+              <span class="label">Time before the first note <span class="dim">(fader 2)</span></span>
+              <div class="stepper" role="group" aria-label="Lead-in">
+                <button onclick={() => setLeadIn(leadIn - 1)} aria-label="Shorter lead-in">−</button>
+                <span class="mono">{leadIn} s</span>
+                <button onclick={() => setLeadIn(leadIn + 1)} aria-label="Longer lead-in">+</button>
+              </div>
+            </div>
+            <div class="field">
+              <span class="label">Loop <span class="dim">(or the loop pad)</span></span>
+              <Segmented
+                label="Loop"
+                value={loop ? "on" : "off"}
+                onchange={(v) => setLoop(v === "on")}
+                options={[
+                  { value: "off", label: "Play once" },
+                  { value: "on", label: "Loop" },
+                ]}
+              />
             </div>
             <button class="edit" onclick={() => openEditor(songId)}>Edit notes</button>
           </div>
@@ -185,48 +233,37 @@
   </TopBar>
 </div>
 
-{#if !playing && !finished}
-  <div class="center">
-    <button class="big-play" onclick={toggle} aria-label="Play song">
-      <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path class="fill" d="M8 5l11 7-11 7z" /></svg>
-    </button>
-    <div class="hint">
-      {#if mode === "wait" && next}
-        Play <span class="mono notes">{next}</span> to start
-      {:else}
-        Press play
-      {/if}
-      <span class="dim">· or the ▶ pad</span>
-    </div>
+<!-- Everything sits in this corner; the middle of the screen is only for the notes. -->
+<div class="corner">
+  <button class="round" onclick={toggle} aria-label={playing ? "Pause song" : "Play song"}>
+    {#if playing}
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5v14M16 5v14" /></svg>
+    {:else}
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path class="fill" d="M8 5l11 7-11 7z" /></svg>
+    {/if}
+  </button>
+  {#if finished}
+    <span class="chip done">Done · {accuracy}%</span>
+    <button class="link" onclick={() => practice.restart()}>Again</button>
+  {:else if !playing}
+    <span class="paused dim">Space or ▶ pad to play</span>
     {#if time > practice.startTime + 0.01}
       <button class="link" onclick={() => practice.restart()}>Start over</button>
     {/if}
-  </div>
-{/if}
-
-{#if finished}
-  <div class="center">
-    <div class="done">
-      <div class="score">{accuracy}%</div>
-      <div class="dim">{hits} of {total} notes{wrong ? ` · ${wrong} wrong` : ""}</div>
-      <div class="row">
-        <button class="primary" onclick={() => practice.restart()}>Again</button>
-        <button class="link" onclick={() => nav.back()}>Back</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-<div class="corner">
-  {#if playing}
-    <button class="round" onclick={toggle} aria-label="Pause song">
-      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5v14M16 5v14" /></svg>
-    </button>
   {/if}
   <span class="chip mono" title="Notes hit / notes to play">
     {hits}/{total}{#if wrong}<span class="wrong">{` · ${wrong}`}</span>{/if}
   </span>
-  {#if speed !== 1}<span class="chip mono">{Math.round(speed * 100)}%</span>{/if}
+  {#if adjusting}
+    <span class="chip mono adjusting">{adjusting}</span>
+  {:else if speed !== 1}
+    <span class="chip mono">{Math.round(speed * 100)}%</span>
+  {/if}
+  {#if loop}
+    <span class="chip loop" title="Starts over at the end">
+      Loop{passes ? ` · pass ${passes + 1}` : ""}{lastScore !== null ? ` · last ${lastScore}%` : ""}
+    </span>
+  {/if}
 </div>
 
 <div
@@ -341,45 +378,8 @@
     border-color: var(--line-strong);
   }
 
-  .center {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-content: center;
-    justify-items: center;
-    gap: 14px;
-    pointer-events: none;
-  }
-  .center > * {
-    pointer-events: auto;
-  }
-  .big-play {
-    width: 84px;
-    height: 84px;
-    display: grid;
-    place-items: center;
-    padding-left: 4px;
-    border-radius: 50%;
-    border: 0;
-    background: var(--pulse);
-    color: var(--void);
-    box-shadow:
-      0 0 0 10px rgba(127, 212, 255, 0.08),
-      0 0 48px rgba(127, 212, 255, 0.45);
-    transition: transform 180ms cubic-bezier(0.3, 1.6, 0.5, 1);
-  }
-  .big-play:hover {
-    transform: scale(1.06);
-  }
-  .big-play:active {
-    transform: scale(0.96);
-  }
-  .hint {
-    font-size: 14px;
-  }
-  .notes {
-    color: var(--tint);
-    font-size: 15px;
+  .paused {
+    font-size: 12px;
   }
   .link {
     font-size: 13px;
@@ -392,35 +392,11 @@
   .link:hover {
     color: var(--snow);
   }
-  .done {
-    display: grid;
-    justify-items: center;
-    gap: 8px;
-    padding: 28px 40px;
-    border-radius: 24px;
-    background: rgba(22, 22, 29, 0.9);
-    border: 1px solid var(--line-strong);
-    backdrop-filter: blur(20px);
-  }
-  .score {
-    font-size: 64px;
-    font-weight: 600;
-    letter-spacing: -0.04em;
-    line-height: 1;
-  }
-  .row {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    margin-top: 8px;
-  }
-  .primary {
-    padding: 9px 20px;
-    border-radius: 999px;
-    border: 0;
-    background: var(--pulse);
-    color: var(--void);
-    font-weight: 500;
+  .done,
+  .loop,
+  .adjusting {
+    color: var(--tint);
+    border-color: rgba(127, 212, 255, 0.4);
   }
 
   .corner {
