@@ -1,11 +1,20 @@
-// Practice logic: where the song is, which notes are due, and whether they were played. No drawing here.
+// Practice logic: where the song is, which notes are due, whether they were played, and which notes
+// Pulsar plays itself. No drawing or audio here: sound goes out through `sound`.
 import { barTimes, secondsAt, type Song } from "./songs";
 
-export type Mode = "wait" | "tempo";
+/** wait: the song waits for you. tempo: it keeps going. listen: Pulsar plays it all for you. */
+export type Mode = "wait" | "tempo" | "listen";
 export type NoteState = "pending" | "hit" | "missed";
 
 /** `track` indexes Song.tracks. */
-export type PracticeNote = { key: number; start: number; end: number; track: number; state: NoteState };
+export type PracticeNote = {
+  key: number;
+  start: number;
+  end: number;
+  velocity: number;
+  track: number;
+  state: NoteState;
+};
 /** Notes that start together: a chord, or a single note. */
 export type Chord = { start: number; notes: PracticeNote[] };
 
@@ -30,7 +39,6 @@ export class Practice {
 
   /** Song position in seconds (at 100% speed). Negative during the lead-in. */
   time: number;
-  playing = false;
   finished = false;
   speed = 1;
   /** Real seconds between pressing play and the first note. */
@@ -43,19 +51,28 @@ export class Practice {
   mode: Mode = "wait";
   /** The tracks you play; the rest are shown faintly and left out of the score. */
   played: Set<number>;
+  /** Pulsar plays the tracks you don't. */
+  accompany = false;
   hits = 0;
   wrong = 0;
   /** performance.now() of the last wrong press per key, for a brief flash. */
   readonly wrongAt = new Float64Array(128);
+  /** Plays a note out loud (velocity 0 releases it): the notes Pulsar plays go out here. */
+  sound: ((key: number, velocity: number) => void) | null = null;
 
   /** First chord not yet finished (wait mode) or not yet passed (tempo mode). */
   private cursor = 0;
+  private _playing = false;
+  /** Notes Pulsar is sounding now, and the first note it hasn't reached yet. */
+  private readonly sounding = new Set<PracticeNote>();
+  private autoCursor = 0;
 
   constructor(song: Song, leadIn = DEFAULT_LEAD_IN) {
     this.notes = song.notes.map((n) => ({
       key: n.key,
       start: secondsAt(song, n.start),
       end: secondsAt(song, n.start + n.length),
+      velocity: n.velocity,
       track: n.track,
       state: "pending" as NoteState,
     }));
@@ -80,6 +97,16 @@ export class Practice {
     return this.firstNote - this.leadIn * this.speed;
   }
 
+  get playing(): boolean {
+    return this._playing;
+  }
+
+  /** Pausing also lets go of anything Pulsar is playing. */
+  set playing(on: boolean) {
+    this._playing = on;
+    if (!on) this.silence();
+  }
+
   private get atStart(): boolean {
     return !this.playing && this.time <= this.startTime + 1e-6;
   }
@@ -96,8 +123,26 @@ export class Practice {
     if (atStart) this.time = this.startTime;
   }
 
+  /** Yours to play (in listen mode every note is shown as if it were). */
   isActive(note: PracticeNote): boolean {
-    return this.played.has(note.track);
+    return this.mode === "listen" || this.played.has(note.track);
+  }
+
+  /** Pulsar plays this note: all of them when listening, the other tracks when accompanying. */
+  isAuto(note: PracticeNote): boolean {
+    return this.mode === "listen" || (this.accompany && !this.played.has(note.track));
+  }
+
+  /** Whether Pulsar is sounding `key` right now (so its echo isn't taken for your press). */
+  isAutoKey(key: number): boolean {
+    for (const n of this.sounding) if (n.key === key) return true;
+    return false;
+  }
+
+  /** Lets go of every note Pulsar is playing. */
+  silence() {
+    for (const n of this.sounding) this.sound?.(n.key, 0);
+    this.sounding.clear();
   }
 
   get total(): number {
@@ -117,13 +162,14 @@ export class Practice {
     if (this.mode === "wait") {
       const chord = this.nextChord();
       if (chord && next >= chord.start) next = chord.start;
-    } else {
+    } else if (this.mode === "tempo") {
       const late = next - HIT_WINDOW * this.speed;
       while (this.cursor < this.chords.length && this.chords[this.cursor].start < late) {
         for (const n of this.chords[this.cursor].notes) if (this.isActive(n) && n.state === "pending") n.state = "missed";
         this.cursor++;
       }
     }
+    this.autoplay(this.time, next);
     this.time = next;
     if (this.time >= this.duration + 0.5) {
       this.passes++;
@@ -140,7 +186,7 @@ export class Practice {
 
   /** A key went down (from any source). Ignored while paused: only play/pause starts the song. */
   press(key: number) {
-    if (this.finished || !this.playing) return;
+    if (this.finished || !this.playing || this.mode === "listen") return;
     if (this.mode === "wait") {
       const chord = this.nextChord();
       if (!chord) return;
@@ -178,6 +224,9 @@ export class Practice {
     this.recount();
     this.cursor = this.chords.findIndex((c) => c.start >= this.time - 0.001);
     if (this.cursor < 0) this.cursor = this.chords.length;
+    this.silence();
+    this.autoCursor = this.notes.findIndex((n) => n.start >= this.time - 0.001);
+    if (this.autoCursor < 0) this.autoCursor = this.notes.length;
     this.finished = false;
   }
 
@@ -197,6 +246,23 @@ export class Practice {
     const played = [...tracks].filter((t) => t >= 0 && t < this.tracks.length);
     this.played = new Set(played.length ? played : this.tracks.keys());
     this.recount();
+  }
+
+  /** Pulsar's notes between two song times: ends first, so a repeated key sounds again. */
+  private autoplay(from: number, to: number) {
+    for (const n of this.sounding) {
+      if (n.end > to && this.isAuto(n)) continue;
+      this.sound?.(n.key, 0);
+      this.sounding.delete(n);
+    }
+    while (this.autoCursor < this.notes.length && this.notes[this.autoCursor].start < to) {
+      const n = this.notes[this.autoCursor++];
+      if (n.start < from - 0.001 || !this.isAuto(n)) continue;
+      // The same key starting again takes over from the note still sounding there.
+      for (const other of this.sounding) if (other.key === n.key) this.sounding.delete(other);
+      this.sound?.(n.key, n.velocity);
+      this.sounding.add(n);
+    }
   }
 
   private nextChord(): Chord | undefined {

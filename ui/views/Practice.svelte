@@ -7,6 +7,7 @@
   import TopBar from "../lib/TopBar.svelte";
   import { nav, openEditor, practicePrefs, savePracticePrefs } from "../lib/app.svelte";
   import { onAction, onFader } from "../lib/controls";
+  import { engine } from "../lib/engine";
   import { live, type SongView } from "../lib/live";
   import { Practice, type Mode } from "../lib/practice";
   import { trackCss, type Song } from "../lib/songs";
@@ -19,8 +20,12 @@
   practice.loop = practicePrefs.loop;
   // svelte-ignore state_referenced_locally
   practice.setPlayed(practicePrefs.tracks[songId] ?? []);
+  practice.accompany = practicePrefs.accompany;
+  // Notes Pulsar plays (listen mode, accompaniment) go to the synth like any other.
+  practice.sound = (key, velocity) => engine.note(key, velocity);
   live.practice = practice;
   onDestroy(() => {
+    practice.silence();
     // The next screen may already have its own practice running.
     if (live.practice === practice) live.practice = null;
   });
@@ -38,6 +43,7 @@
   let view = $state<SongView>(live.songView);
   let optionsOpen = $state(false);
   let loop = $state(practice.loop);
+  let accompany = $state(practice.accompany);
   let leadIn = $state(practice.leadIn);
   let passes = $state(0);
   let lastScore = $state<number | null>(null);
@@ -113,6 +119,12 @@
   function setMode(m: Mode) {
     mode = m;
     practice.setMode(m);
+    total = practice.total;
+  }
+
+  function setAccompany(on: boolean) {
+    accompany = practice.accompany = practicePrefs.accompany = on;
+    savePracticePrefs();
   }
 
   /** Tracks with notes; empty ones aren't worth choosing. */
@@ -179,10 +191,14 @@
                 options={[
                   { value: "wait", label: "Wait for me" },
                   { value: "tempo", label: "Keep tempo" },
+                  { value: "listen", label: "Listen" },
                 ]}
               />
+              {#if mode === "listen"}
+                <span class="hint dim">Pulsar plays the whole song for you</span>
+              {/if}
             </div>
-            {#if playable.length > 1}
+            {#if playable.length > 1 && mode !== "listen"}
               <div class="field">
                 <span class="label">Tracks you play</span>
                 <div class="tracks" role="group" aria-label="Tracks you play">
@@ -205,6 +221,20 @@
                   {/each}
                 </div>
               </div>
+              {#if playable.some((t) => !played.includes(t))}
+                <div class="field">
+                  <span class="label">The tracks you don't play</span>
+                  <Segmented
+                    label="The tracks you don't play"
+                    value={accompany ? "play" : "show"}
+                    onchange={(v) => setAccompany(v === "play")}
+                    options={[
+                      { value: "show", label: "Just show them" },
+                      { value: "play", label: "Pulsar plays them" },
+                    ]}
+                  />
+                </div>
+              {/if}
             {/if}
             <div class="field">
               <span class="label">Show</span>
@@ -264,17 +294,21 @@
     {/if}
   </button>
   {#if finished}
-    <span class="chip done">Done · {accuracy}%</span>
+    <span class="chip done">Done{mode === "listen" ? "" : ` · ${accuracy}%`}</span>
     <button class="link" onclick={() => practice.restart()}>Again</button>
   {:else if !playing}
-    <span class="paused dim">Space or ▶ pad to play</span>
+    <span class="paused dim">Space or ▶ pad to {mode === "listen" ? "listen" : "play"}</span>
     {#if time > practice.startTime + 0.01}
       <button class="link" onclick={() => practice.restart()}>Start over</button>
     {/if}
   {/if}
-  <span class="chip mono" title="Notes hit / notes to play">
-    {hits}/{total}{#if wrong}<span class="wrong">{` · ${wrong}`}</span>{/if}
-  </span>
+  {#if mode === "listen"}
+    <span class="chip listening">Listening</span>
+  {:else}
+    <span class="chip mono" title="Notes hit / notes to play">
+      {hits}/{total}{#if wrong}<span class="wrong">{` · ${wrong}`}</span>{/if}
+    </span>
+  {/if}
   {#if adjusting}
     <span class="chip mono adjusting">{adjusting}</span>
   {:else if speed !== 1}
@@ -467,8 +501,12 @@
   .link:hover {
     color: var(--snow);
   }
+  .hint {
+    font-size: 12px;
+  }
   .done,
   .loop,
+  .listening,
   .adjusting {
     color: var(--tint);
     border-color: rgba(127, 212, 255, 0.4);

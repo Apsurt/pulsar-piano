@@ -89,10 +89,11 @@
 
   onMount(() => {
     const unlisten = [
-      engine.onNote(({ key, velocity }) => {
+      engine.onNote(({ key, velocity, device }) => {
         if (velocity > 0) {
           press(key, velocity);
-          live.practice?.press(key);
+          // Notes Pulsar plays itself come back here too; they aren't yours.
+          if (device || !live.practice?.isAutoKey(key)) live.practice?.press(key);
           played.lastNote = { key, velocity };
           played.activity++;
         } else {

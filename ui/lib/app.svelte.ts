@@ -40,10 +40,12 @@ type PracticePrefs = {
   leadIn: number;
   /** The tracks you play, per song id; songs not listed play every track. */
   tracks: Record<string, number[]>;
+  /** Pulsar plays the tracks you don't. */
+  accompany: boolean;
 };
 
 function loadPracticePrefs(): PracticePrefs {
-  const defaults: PracticePrefs = { loop: false, leadIn: 2, tracks: {} };
+  const defaults: PracticePrefs = { loop: false, leadIn: 2, tracks: {}, accompany: false };
   try {
     return { ...defaults, ...JSON.parse(localStorage.getItem(PRACTICE_PREFS) ?? "{}") };
   } catch {

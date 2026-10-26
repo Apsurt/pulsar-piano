@@ -159,23 +159,45 @@
   // ---- Tracks ---------------------------------------------------------------------------------
 
   let tracksOpen = $state(false);
+  /** The track whose name is being edited, and the one waiting for a delete confirmation. */
+  let renaming = $state<number | null>(null);
+  let confirming = $state<number | null>(null);
 
   async function addTrack() {
     remember();
     doc.tracks.push({ name: `Track ${doc.tracks.length + 1}` });
     track = doc.tracks.length - 1;
     changed();
-    await tick();
-    (document.getElementById(`track-name-${track}`) as HTMLInputElement | null)?.select();
+    startRename(track);
   }
 
-  function renameTrack(i: number, name: string) {
+  async function startRename(i: number) {
+    confirming = null;
+    renaming = i;
+    await tick();
+    (document.getElementById("track-rename") as HTMLInputElement | null)?.select();
+  }
+
+  function finishRename(name: string) {
+    const i = renaming;
+    renaming = null;
+    if (i === null) return;
+    name = name.trim() || `Track ${i + 1}`;
+    if (name === doc.tracks[i].name) return;
+    remember();
     doc.tracks[i].name = name;
     changed();
   }
 
+  /** Empty tracks go at once; a track with notes asks first. */
+  function askDelete(i: number) {
+    if (trackList[i].notes) confirming = i;
+    else deleteTrack(i);
+  }
+
   /** Deletes the track and its notes (undoable). The last track can't go. */
   function deleteTrack(i: number) {
+    confirming = null;
     if (doc.tracks.length < 2) return;
     remember();
     doc.tracks.splice(i, 1);
@@ -255,10 +277,11 @@
   type RGB = [number, number, number];
   const PULSE: RGB = [127, 212, 255];
   const rgba = (c: RGB, a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
-  /** Room below beat 0. */
-  const PAD = 30;
+  /** Room below beat 0: clear of the dock, so the first notes aren't hidden behind it. */
+  let pad = 30;
 
   let canvas: HTMLCanvasElement;
+  let dock: HTMLDivElement;
   let ctx: CanvasRenderingContext2D;
   let w = 0, h = 0, dpr = 1;
   let keys: KeyRect[] = [];
@@ -267,15 +290,15 @@
   let ppb = 56;
   let hover: { key: number; beat: number } | null = null;
 
-  const yOf = (beat: number) => h - PAD - (beat - scroll) * ppb;
-  const beatAt = (y: number) => scroll + (h - PAD - y) / ppb;
+  const yOf = (beat: number) => h - pad - (beat - scroll) * ppb;
+  const beatAt = (y: number) => scroll + (h - pad - y) / ppb;
   const floorSnap = (beat: number) => Math.max(0, Math.floor(beat / SNAP + 1e-6) * SNAP);
   const roundSnap = (beat: number) => Math.round(beat / SNAP) * SNAP;
 
   /** Keep `beat` comfortably on screen. */
   function reveal(beat: number) {
     const y = yOf(beat);
-    if (y < h * 0.25 || y > h - PAD) scroll = Math.max(0, beat - (h - PAD) / ppb / 2);
+    if (y < h * 0.25 || y > h - pad) scroll = Math.max(0, beat - (h - pad) / ppb / 2);
   }
 
   /** The key column under x: black keys are narrower and sit on top. */
@@ -310,6 +333,7 @@
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
     keys = layout(w, 1);
+    pad = h - dock.offsetTop + 14;
   }
 
   function draw(now: number) {
@@ -499,7 +523,7 @@
       const { y } = point(e);
       const anchor = beatAt(y);
       ppb = Math.min(220, Math.max(14, ppb * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
-      scroll = Math.max(0, anchor - (h - PAD - y) / ppb);
+      scroll = Math.max(0, anchor - (h - pad - y) / ppb);
     } else {
       scroll = Math.max(0, scroll - e.deltaY / ppb);
     }
@@ -682,7 +706,7 @@
       </form>
     {/if}
 
-    <div class="dock">
+    <div class="dock" bind:this={dock}>
       <button class="record" class:on={stepInput} onclick={toggleStepInput} aria-pressed={stepInput}>
         <span class="dot" aria-hidden="true"></span>
         Step input
@@ -699,42 +723,66 @@
           <span class="swatch" style:--color={trackCss(track)} aria-hidden="true"></span>
           <span class="track-name">{trackList[track]?.name}</span>
         </button>
-        <Sheet label="Tracks" open={tracksOpen} onclose={() => (tracksOpen = false)} width={300}>
+        <Sheet
+          label="Tracks"
+          open={tracksOpen}
+          onclose={() => {
+            // Closing (Escape, a click outside) keeps a name being typed.
+            const input = document.getElementById("track-rename") as HTMLInputElement | null;
+            if (input) finishRename(input.value);
+            tracksOpen = false;
+            confirming = null;
+          }}
+          width={280}
+        >
           <div class="tracks">
-            <span class="label">New notes go on the selected track</span>
-            {#each trackList as t, i (i)}
-              <div class="track-row" class:current={i === track}>
-                <button class="pick" aria-label="Add notes to {t.name}" aria-pressed={i === track} onclick={() => (track = i)}>
-                  <span class="swatch" style:--color={trackCss(i)} aria-hidden="true"></span>
-                </button>
-                <input
-                  id="track-name-{i}"
-                  value={t.name}
-                  aria-label="Track name"
-                  onfocus={() => {
-                    track = i;
-                    remember();
-                  }}
-                  oninput={(e) => renameTrack(i, e.currentTarget.value)}
-                  onblur={(e) => {
-                    if (!e.currentTarget.value.trim()) renameTrack(i, `Track ${i + 1}`);
-                  }}
-                  onkeydown={(e) => {
-                    if (e.key === "Enter") e.currentTarget.blur();
-                  }}
-                />
-                <span class="count dim" title="Notes">{t.notes}</span>
-                <button
-                  class="ghost icon small-icon"
-                  aria-label="Delete {t.name}"
-                  title={t.notes ? `Delete the track and its ${t.notes} notes` : "Delete the track"}
-                  disabled={trackList.length < 2}
-                  onclick={() => deleteTrack(i)}
-                >
-                  <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-                </button>
-              </div>
-            {/each}
+            <span class="label">New notes go on the highlighted track</span>
+            <div class="track-list">
+              {#each trackList as t, i (i)}
+                <div class="track-row" class:current={i === track} style:--color={trackCss(i)}>
+                  {#if renaming === i}
+                    <span class="swatch" aria-hidden="true"></span>
+                    <input
+                      id="track-rename"
+                      class="rename"
+                      value={t.name}
+                      aria-label="Track name"
+                      onblur={(e) => finishRename(e.currentTarget.value)}
+                      onkeydown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                      }}
+                    />
+                  {:else if confirming === i}
+                    <span class="confirm">Delete {t.name} and its {t.notes} notes?</span>
+                    <button class="mini danger" onclick={() => deleteTrack(i)}>Delete</button>
+                    <button class="mini" onclick={() => (confirming = null)}>Keep</button>
+                  {:else}
+                    <button
+                      class="pick"
+                      aria-pressed={i === track}
+                      onclick={() => (track = i)}
+                      ondblclick={() => startRename(i)}
+                    >
+                      <span class="swatch" aria-hidden="true"></span>
+                      <span class="name">{t.name}</span>
+                      <span class="count" title="Notes">{t.notes}</span>
+                    </button>
+                    <button class="row-action" aria-label="Rename {t.name}" title="Rename" onclick={() => startRename(i)}>
+                      <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+                        <path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" />
+                      </svg>
+                    </button>
+                    {#if trackList.length > 1}
+                      <button class="row-action" aria-label="Delete {t.name}" title="Delete" onclick={() => askDelete(i)}>
+                        <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+                          <path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" />
+                        </svg>
+                      </button>
+                    {/if}
+                  {/if}
+                </div>
+              {/each}
+            </div>
             <div class="track-actions">
               <button class="ghost" onclick={addTrack}>+ Add track</button>
               {#if selectedTrack !== null && selectedTrack !== track}
@@ -865,58 +913,116 @@
   }
   .tracks {
     display: grid;
-    gap: 6px;
+    gap: 10px;
+    white-space: normal;
+  }
+  .track-list {
+    display: grid;
+    gap: 2px;
   }
   .track-row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 2px;
-    border-radius: 12px;
-    border: 1px solid transparent;
+    gap: 2px;
+    min-width: 0;
+    min-height: 38px;
+    padding: 0 4px 0 10px;
+    border-radius: 10px;
+    transition: background 120ms;
+  }
+  .track-row:hover {
+    background: rgba(255, 255, 255, 0.04);
   }
   .track-row.current {
-    border-color: var(--line-strong);
-    background: rgba(255, 255, 255, 0.05);
-  }
-  .track-row:not(.current) .swatch {
-    opacity: 0.45;
-    box-shadow: none;
-  }
-  .track-row input {
-    flex: 1;
-    border-color: transparent;
-    background: transparent;
-    padding: 6px 8px;
-  }
-  .track-row input:hover {
-    border-color: var(--line);
+    background: color-mix(in srgb, var(--color) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color) 35%, transparent);
   }
   .pick {
-    width: 28px;
-    height: 28px;
-    display: grid;
-    place-items: center;
+    flex: 1;
+    min-width: 0;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0;
     border: 0;
-    border-radius: 50%;
     background: transparent;
+    font-size: 13px;
+    color: var(--mist);
+    text-align: left;
+  }
+  .track-row.current .pick,
+  .pick:hover {
+    color: var(--snow);
+  }
+  .name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .count {
     font-family: var(--mono);
     font-size: 11px;
-    min-width: 3ch;
-    text-align: right;
+    color: var(--mist);
+    opacity: 0.7;
+    padding-right: 4px;
   }
-  .small-icon {
-    width: 26px;
-    height: 26px;
+  .row-action {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--mist);
+    opacity: 0;
+    transition: opacity 120ms;
+  }
+  .track-row:hover .row-action,
+  .track-row.current .row-action,
+  .row-action:focus-visible {
+    opacity: 1;
+  }
+  .row-action:hover {
+    color: var(--snow);
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .rename {
+    flex: 1;
+    min-width: 0;
+    margin-left: 8px;
+    padding: 5px 8px;
+  }
+  .confirm {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 6px 6px 0;
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--snow);
+  }
+  .mini {
+    flex: none;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--mist);
+  }
+  .mini.danger {
     border-color: transparent;
+    background: var(--coral);
+    color: var(--void);
   }
   .track-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin-top: 4px;
   }
   .help-list {
     margin: 0;

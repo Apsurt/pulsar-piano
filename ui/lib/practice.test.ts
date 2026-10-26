@@ -117,3 +117,53 @@ describe("tracks", () => {
     expect([...p.played]).toEqual([0, 1, 2]);
   });
 });
+
+describe("Pulsar playing notes", () => {
+  /** Records what Pulsar plays, as "key:velocity" (0 releases). Notes go in sorted by start, then key, like songs. */
+  function recording(notes: [key: number, start: number, length: number, track?: number][]) {
+    const p = new Practice(song(notes), 0);
+    const played: string[] = [];
+    p.sound = (key, velocity) => played.push(`${key}:${velocity}`);
+    return { p, played };
+  }
+
+  it("plays every note in time when listening, and ignores your keys", () => {
+    const { p, played } = recording([[60, 0, 1], [48, 1, 1, 1], [64, 1, 0.5]]);
+    p.setMode("listen");
+    p.playing = true;
+    run(p, 0.5);
+    expect(played).toEqual(["60:90"]);
+    p.press(61);
+    expect(p.wrong).toBe(0);
+    run(p, 1.2);
+    expect(played).toEqual(["60:90", "60:0", "48:90", "64:90", "64:0"]);
+    run(p, 1);
+    expect(played.at(-1)).toBe("48:0");
+  });
+
+  it("accompanies you on the tracks you don't play, waiting with you", () => {
+    const { p, played } = recording([[36, 0, 0.5, 1], [48, 1, 1, 1], [60, 1, 1]]);
+    p.setPlayed([0]);
+    p.accompany = true;
+    p.playing = true;
+    run(p, 2);
+    // The left hand's C2 played on its own; its C3 waits for your C4.
+    expect(played).toEqual(["36:90", "36:0"]);
+    expect(p.waiting?.start).toBe(1);
+    p.press(60);
+    run(p, 0.05);
+    expect(played.at(-1)).toBe("48:90");
+    expect(p.isAutoKey(48)).toBe(true);
+  });
+
+  it("lets go when paused or moved, and plays a repeated key again", () => {
+    const { p, played } = recording([[60, 0, 1], [60, 1, 1]]);
+    p.setMode("listen");
+    p.playing = true;
+    run(p, 1.5);
+    expect(played).toEqual(["60:90", "60:0", "60:90"]);
+    p.playing = false;
+    expect(played.at(-1)).toBe("60:0");
+    expect(p.isAutoKey(60)).toBe(false);
+  });
+});
