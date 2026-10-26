@@ -93,11 +93,12 @@
         if (velocity > 0) {
           press(key, velocity);
           // Notes Pulsar plays itself come back here too; they aren't yours.
-          if (device || !live.practice?.isAutoKey(key)) live.practice?.press(key);
+          if (device || !live.practice?.isAutoKey(key)) live.practice?.press(key, velocity);
           played.lastNote = { key, velocity };
           played.activity++;
         } else {
           release(key);
+          live.practice?.release(key);
         }
         played.held = heldCount();
         live.noteListener?.(key, velocity);

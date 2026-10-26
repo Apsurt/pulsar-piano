@@ -95,3 +95,14 @@ pub fn save_song(
 pub fn delete_song(songs: State<Songs>, id: String) -> Result<(), String> {
     songs.0.delete(&id)
 }
+
+/// Your recorded takes of a song (best, latest, kept): what the practice review compares.
+#[tauri::command]
+pub fn get_takes(songs: State<Songs>, id: String) -> Result<Option<serde_json::Value>, String> {
+    songs.0.load_takes(&id)
+}
+
+#[tauri::command]
+pub fn save_takes(songs: State<Songs>, id: String, takes: serde_json::Value) -> Result<(), String> {
+    songs.0.save_takes(&id, &takes)
+}

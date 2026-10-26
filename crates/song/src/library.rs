@@ -106,12 +106,46 @@ impl Library {
         self.save(id, &song)
     }
 
-    /// Moves the song into a `.deleted` folder rather than erasing it.
+    /// Moves the song (and its takes) into a `.deleted` folder rather than erasing it.
     pub fn delete(&self, id: &str) -> Result<(), String> {
         let path = self.path(id)?;
         let trash = self.dir.join(".deleted");
         fs::create_dir_all(&trash).map_err(|e| e.to_string())?;
-        fs::rename(&path, trash.join(format!("{id}.json"))).map_err(|e| e.to_string())
+        fs::rename(&path, trash.join(format!("{id}.json"))).map_err(|e| e.to_string())?;
+        let takes = self.takes_path(id)?;
+        if takes.exists() {
+            fs::rename(&takes, trash.join(format!("{id}.takes.json")))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Your recorded takes of a song (the app decides what's in them), if any.
+    pub fn load_takes(&self, id: &str) -> Result<Option<serde_json::Value>, String> {
+        let path = self.takes_path(id)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Kept beside the songs in a `.takes` folder, written atomically like songs.
+    pub fn save_takes(&self, id: &str, takes: &serde_json::Value) -> Result<(), String> {
+        let path = self.takes_path(id)?;
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, takes.to_string()).map_err(|e| e.to_string())?;
+        fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    }
+
+    fn takes_path(&self, id: &str) -> Result<PathBuf, String> {
+        valid_id(id)?;
+        Ok(self.dir.join(".takes").join(format!("{id}.json")))
     }
 
     fn path(&self, id: &str) -> Result<PathBuf, String> {
@@ -222,9 +256,25 @@ mod tests {
             ("Helpless", "Hamilton")
         );
 
+        // Takes live beside the songs, aren't songs themselves, and go to the trash with their song.
+        let takes = serde_json::json!({ "latest": { "score": { "overall": 80 } } });
+        assert_eq!(library.load_takes(&second.id).unwrap(), None);
+        library.save_takes(&second.id, &takes).unwrap();
+        assert_eq!(library.load_takes(&second.id).unwrap(), Some(takes));
+        assert_eq!(library.list().len(), 2);
+
         library.delete(&second.id).unwrap();
         assert_eq!(library.list().len(), 1);
         assert!(dir.join("songs/.deleted/my-song-piano-2.json").exists());
+        assert!(
+            dir.join("songs/.deleted/my-song-piano-2.takes.json")
+                .exists()
+        );
+        assert!(
+            library
+                .save_takes("../x", &serde_json::Value::Null)
+                .is_err()
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

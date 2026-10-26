@@ -18,6 +18,19 @@ export type PracticeNote = {
 /** Notes that start together: a chord, or a single note. */
 export type Chord = { start: number; notes: PracticeNote[] };
 
+/** A key you pressed during a pass, in song seconds. */
+export type PlayedNote = { key: number; velocity: number; start: number; end: number };
+/** Everything you played in one full pass, for reviewing it against the song. */
+export type Recording = {
+  mode: Mode;
+  speed: number;
+  /** The tracks you were playing. */
+  tracks: number[];
+  played: PlayedNote[];
+  /** Wait mode: real seconds the song waited for you at each chord (by its start), where it waited. */
+  waits: { start: number; seconds: number }[];
+};
+
 /** Default real seconds from pressing play to the first note. */
 export const DEFAULT_LEAD_IN = 2;
 /** Notes starting within this many seconds of each other form one chord. */
@@ -65,6 +78,8 @@ export class Practice {
   readonly wrongAt = new Float64Array(128);
   /** Plays a note out loud (velocity 0 releases it): the notes Pulsar plays go out here. */
   sound: ((key: number, velocity: number) => void) | null = null;
+  /** Called with what you played when a full pass ends (from the start, not seeked or listened to). */
+  onPass: ((recording: Recording) => void) | null = null;
 
   /** First chord not yet finished (wait mode) or not yet passed (tempo mode). */
   private cursor = 0;
@@ -72,6 +87,11 @@ export class Practice {
   /** Notes Pulsar is sounding now, and the first note it hasn't reached yet. */
   private readonly sounding = new Set<PracticeNote>();
   private autoCursor = 0;
+  /** This pass so far: your presses (`end` NaN while held), the waits by chord index, and whether
+   *  it's still a full pass (it started at the beginning and nothing jumped). */
+  private take: PlayedNote[] = [];
+  private readonly waits = new Map<number, number>();
+  private whole = true;
 
   constructor(song: Song, leadIn = DEFAULT_LEAD_IN) {
     this.notes = song.notes.map((n) => ({
@@ -190,6 +210,7 @@ export class Practice {
     let next = this.time + dt * this.speed;
     if (this.mode === "wait") {
       const chord = this.nextChord();
+      if (chord && this.time >= chord.start) this.waits.set(this.cursor, (this.waits.get(this.cursor) ?? 0) + dt);
       if (chord && next >= chord.start) next = chord.start;
     } else if (this.mode === "tempo") {
       const late = next - HIT_WINDOW * this.speed;
@@ -203,6 +224,8 @@ export class Practice {
     if (this.time >= this.duration + 0.5) {
       this.passes++;
       this.lastScore = this.total ? Math.round((this.hits / this.total) * 100) : 0;
+      const recording = this.recording();
+      if (recording) this.onPass?.(recording);
       if (this.loop) {
         this.restart();
         this.playing = true;
@@ -214,8 +237,9 @@ export class Practice {
   }
 
   /** A key went down (from any source). Ignored while paused: only play/pause starts the song. */
-  press(key: number) {
+  press(key: number, velocity = 100) {
     if (this.finished || !this.playing || this.mode === "listen") return;
+    this.take.push({ key, velocity, start: this.time, end: NaN });
     if (this.mode === "wait") {
       const chord = this.nextChord();
       if (!chord) return;
@@ -246,9 +270,23 @@ export class Practice {
     }
   }
 
+  /** A key came up: ends the press it belongs to, if this pass recorded one. */
+  release(key: number) {
+    const note = this.take.findLast((n) => n.key === key && Number.isNaN(n.end));
+    if (note) note.end = Math.max(note.start, this.time);
+  }
+
   /** Jump to a song position; everything from there on is to be played again. */
   seek(time: number) {
     this.time = Math.min(Math.max(time, this.startTime), this.duration);
+    // Back at the start is a fresh pass; anywhere else, this pass is no longer a full one.
+    if (this.time <= this.startTime + 1e-6) {
+      this.take = [];
+      this.waits.clear();
+      this.whole = true;
+    } else {
+      this.whole = false;
+    }
     for (const n of this.notes) if (n.start >= this.time - 0.001) n.state = "pending";
     this.recount();
     this.cursor = this.chords.findIndex((c) => c.start >= this.time - 0.001);
@@ -274,6 +312,20 @@ export class Practice {
   setPlayed(tracks: Iterable<number>) {
     this.played = this.validTracks(tracks);
     this.recount();
+    // A pass played on different tracks part of the way can't be compared fairly.
+    if (this.time > this.startTime + 1e-6) this.whole = false;
+  }
+
+  /** What this pass recorded, or null if it wasn't a full pass you played. Held keys end now. */
+  private recording(): Recording | null {
+    if (!this.whole || this.mode === "listen") return null;
+    return {
+      mode: this.mode,
+      speed: this.speed,
+      tracks: [...this.played].sort((a, b) => a - b),
+      played: this.take.map((n) => ({ ...n, end: Number.isNaN(n.end) ? this.time : n.end })),
+      waits: [...this.waits].map(([chord, seconds]) => ({ start: this.chords[chord].start, seconds })),
+    };
   }
 
   /** Which tracks to hear in listen mode, the same way. */

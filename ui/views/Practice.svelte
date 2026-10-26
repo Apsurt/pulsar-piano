@@ -2,6 +2,9 @@
   // Practicing a song. The stage draws the notes and the progress; this screen keeps just the song title,
   // a play prompt and the score in view. Mode, tracks, view and speed live in the Options sheet.
   import { onDestroy, onMount } from "svelte";
+  import { cubicOut } from "svelte/easing";
+  import { fly } from "svelte/transition";
+  import ReviewPanel from "../lib/ReviewPanel.svelte";
   import Segmented from "../lib/Segmented.svelte";
   import Sheet from "../lib/Sheet.svelte";
   import TopBar from "../lib/TopBar.svelte";
@@ -10,7 +13,10 @@
   import { engine } from "../lib/engine";
   import { live, type SongView } from "../lib/live";
   import { Practice, type Mode } from "../lib/practice";
-  import { trackCss, type Song } from "../lib/songs";
+  import { addPass, expectedFor, keepTake, noTakes, review, type Take, type Takes } from "../lib/review";
+  import { noteName } from "../lib/keyboard";
+  import { KEYBOARD, octaveLabel, planOctaves } from "../lib/octave";
+  import { songs, trackCss, type Song } from "../lib/songs";
 
   let { song, songId }: { song: Song; songId: string } = $props();
 
@@ -46,6 +52,14 @@
   let heard = $state([...practice.heard].sort((a, b) => a - b));
   /** The track choice on screen: what you play, or when listening, what you hear. */
   const selection = $derived(mode === "listen" ? heard : played);
+
+  // Where to set your keyboard's octave buttons for the tracks you play, and any changes on the way.
+  const octaves = $derived(planOctaves(practice.notes.filter((n) => played.includes(n.track)), practice.bars));
+  const keysFor = (shift: number) => `${noteName(KEYBOARD.low + 12 * shift)}–${noteName(KEYBOARD.high + 12 * shift)}`;
+  /** While playing: an octave change coming up in the next few seconds (or just now). */
+  const nextChange = $derived(
+    octaves.changes.find((c) => c.at - time > -speed && c.at - time < 4 * speed) ?? null,
+  );
   let view = $state<SongView>(live.songView);
   let optionsOpen = $state(false);
   let loop = $state(practice.loop);
@@ -57,11 +71,72 @@
   let passes = $state(0);
   let lastScore = $state<number | null>(null);
 
+  // ---- Takes: every full pass is recorded and scored; the latest, the best and the ones you keep are saved.
+  let takes = $state<Takes>(noTakes());
+  let lastTake = $state<Take | null>(null);
+  let lastTakeAt = 0;
+  /** Which pass the last take was: a pass that jumped around isn't recorded, so it has none. */
+  let lastTakePass = $state(-1);
+  let reviewing = $state(false);
+  /** The record pad was tapped before or during this pass: keep it when it ends. */
+  let keepNext = $state(false);
+
+  function saveTakes() {
+    songs.saveTakes(songId, $state.snapshot(takes) as Takes).catch(() => {});
+  }
+
+  practice.onPass = (recording) => {
+    const take: Take = { at: Date.now(), recording, score: review(expectedFor(practice.notes, recording), recording).score };
+    const best = addPass(takes, take);
+    if (keepNext) keepTake(takes, take);
+    lastTake = take;
+    lastTakeAt = performance.now();
+    lastTakePass = practice.passes;
+    lastScore = take.score.overall;
+    saveTakes();
+    if (keepNext || best) show(keepNext ? "Take kept" : "New best");
+    keepNext = false;
+    if (!practice.loop) reviewing = true;
+  };
+
+  function keep(take: Take) {
+    if (!keepTake(takes, take)) return;
+    saveTakes();
+    show("Take kept");
+  }
+
+  /** The record pad: keeps the pass you just finished, or else the one you're about to play or playing. */
+  function recordPad() {
+    const justDone = lastTake && (reviewing || finished || performance.now() - lastTakeAt < 4000);
+    if (justDone && !keepNext) return keep(lastTake!);
+    if (mode === "listen") return;
+    keepNext = !keepNext;
+    show(keepNext ? "Keeping this take" : "Not keeping this take");
+  }
+
+  function again() {
+    reviewing = false;
+    practice.restart();
+    practice.playing = true;
+  }
+
   onMount(() => {
+    songs
+      .takes(songId)
+      .then((saved) => {
+        // A pass that already ended while loading wins over what was saved.
+        if (saved && !lastTake) takes = saved;
+      })
+      .catch(() => {});
     const stopPads = onAction((action) => {
-      if (action === "play") toggle();
-      else if (action === "stop") practice.restart();
-      else if (action === "loop") setLoop(!loop);
+      if (action === "play") {
+        if (reviewing) again();
+        else toggle();
+      } else if (action === "stop") {
+        if (reviewing) reviewing = false;
+        else practice.restart();
+      } else if (action === "loop") setLoop(!loop);
+      else if (action === "record") recordPad();
     });
     // Fader 1: speed, fader 2: lead-in.
     const stopFaders = onFader((fader, value) => {
@@ -80,7 +155,6 @@
       hits = practice.hits;
       wrong = practice.wrong;
       passes = practice.passes;
-      lastScore = practice.lastScore;
       // Wrong keys silent: the engine only lets the keys due now sound.
       const keys = muteWrong ? practice.soundKeys() : null;
       const filter = keys ? keys.join(",") : "all";
@@ -184,7 +258,7 @@
   }
 
   function keydown(e: KeyboardEvent) {
-    if ((e.target as HTMLElement).closest?.("input, textarea")) return;
+    if (reviewing || (e.target as HTMLElement).closest?.("input, textarea")) return;
     if (e.key === "Enter") toggle();
     else if (e.key === "Home") practice.restart();
   }
@@ -266,6 +340,20 @@
             {/if}
             {#if mode !== "listen"}
               <div class="field">
+                <span class="label">Your keyboard</span>
+                <span class="plan">
+                  Start at <b>{octaveLabel(octaves.shift)}</b> <span class="dim">({keysFor(octaves.shift)})</span>
+                  {#each octaves.changes as change (change.at)}
+                    <br />then <b>{octaveLabel(change.shift)}</b> at bar {change.bar}
+                  {/each}
+                  {#if octaves.outside}
+                    <br /><span class="dim">
+                      {octaves.outside} note{octaves.outside === 1 ? "" : "s"} still off your keys
+                    </span>
+                  {/if}
+                </span>
+              </div>
+              <div class="field">
                 <span class="label">Wrong keys <span class="dim">(on your keyboard)</span></span>
                 <Segmented
                   label="Wrong keys"
@@ -336,7 +424,10 @@
     {/if}
   </button>
   {#if finished}
-    <span class="chip done">Done{mode === "listen" ? "" : ` · ${accuracy}%`}</span>
+    <span class="chip done">
+      Done{mode === "listen" ? "" : ` · ${lastTakePass === passes && lastScore !== null ? lastScore : accuracy}%`}
+    </span>
+    {#if lastTake}<button class="link" onclick={() => (reviewing = true)}>Review</button>{/if}
     <button class="link" onclick={() => practice.restart()}>Again</button>
   {:else if !playing}
     <span class="paused dim">Space or ▶ pad to {mode === "listen" ? "listen" : "play"}</span>
@@ -360,8 +451,31 @@
     <span class="chip loop" title="Starts over at the end">
       Loop{passes ? ` · pass ${passes + 1}` : ""}{lastScore !== null ? ` · last ${lastScore}%` : ""}
     </span>
+    {#if lastTake && !finished}<button class="link" onclick={() => (reviewing = true)}>Review</button>{/if}
+  {/if}
+  {#if mode !== "listen"}
+    {#if !playing && !finished && time <= practice.startTime + 0.01 && (octaves.shift || octaves.changes.length)}
+      <span class="chip octave" title="Your keyboard's octave buttons, from its normal {keysFor(0)}">
+        Set keyboard to {octaveLabel(octaves.shift)}{octaves.changes.length
+          ? ` · ${octaves.changes.length} change${octaves.changes.length > 1 ? "s" : ""} later`
+          : ""}
+      </span>
+    {:else if playing && nextChange}
+      <span class="chip octave soon">{octaveLabel(nextChange.shift)} at bar {nextChange.bar}</span>
+    {/if}
+  {/if}
+  {#if keepNext}
+    <span class="chip keeping" title="Tap the record pad again to undo">
+      <span class="rec" aria-hidden="true"></span>Keeping this take
+    </span>
   {/if}
 </div>
+
+{#if reviewing}
+  <div class="review-layer" transition:fly={{ y: 18, duration: 240, easing: cubicOut }}>
+    <ReviewPanel {practice} {takes} current={lastTake} onclose={() => (reviewing = false)} onagain={again} onkeep={keep} />
+  </div>
+{/if}
 
 <div
   class="seek"
@@ -554,6 +668,46 @@
     border-color: rgba(127, 212, 255, 0.4);
   }
 
+  .plan {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .plan b {
+    font-weight: 600;
+    color: var(--tint);
+  }
+  .octave {
+    color: var(--tint);
+    border-color: rgba(127, 212, 255, 0.4);
+  }
+  .octave.soon {
+    color: rgb(255, 181, 71);
+    border-color: rgba(255, 181, 71, 0.5);
+  }
+  .keeping {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    border-color: rgba(255, 122, 89, 0.45);
+  }
+  .rec {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--coral);
+    box-shadow: 0 0 8px var(--coral);
+  }
+  .review-layer {
+    position: absolute;
+    top: 72px;
+    bottom: 58px;
+    left: 16px;
+    right: 16px;
+    max-width: 1100px;
+    margin: 0 auto;
+    display: grid;
+    z-index: 3;
+  }
   .corner {
     position: absolute;
     left: 20px;

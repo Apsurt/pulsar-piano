@@ -340,6 +340,8 @@ pub fn run() {
             songs::get_song,
             songs::import_songs_dialog,
             songs::import_song_files,
+            songs::get_takes,
+            songs::save_takes,
             songs::rename_song,
             songs::save_song,
             songs::delete_song

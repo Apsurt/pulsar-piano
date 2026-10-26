@@ -289,6 +289,12 @@
     ctx.fillStyle = "#050508";
     ctx.fillRect(0, kbY, w, kbH);
     for (const r of whites) drawKey(r, decay, WHITE, WHITE_LIT, 6);
+    // Every C says which one it is (C4 is middle C), small, near the front of the key.
+    ctx.font = "600 9px 'Inter Variable', sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "rgba(10,10,15,0.42)";
+    for (const r of whites) if (r.key % 12 === 0 && r.w >= 12) ctx.fillText(noteName(r.key), r.x + r.w / 2, kbY + r.h - 11);
     for (const r of blacks) drawKey(r, decay, BLACK, PULSE, 4);
 
     // Depth: the keys slide under the stage edge.

@@ -1,5 +1,6 @@
 // Song library bridge and song timing. Mirrors crates/song.
 import { invoke } from "@tauri-apps/api/core";
+import type { Takes } from "./review";
 
 /** A part you can choose to play or leave out: a hand, a melody, an accompaniment. */
 export type Track = { name: string };
@@ -35,6 +36,9 @@ export const songs = {
   remove: (id: string) => invoke("delete_song", { id }),
   /** Saves over `id`, or as a new song when `id` is null. */
   save: (id: string | null, song: Song) => invoke<SongSummary>("save_song", { id, song }),
+  /** Your recorded passes of a song: latest, best and kept. */
+  takes: (id: string) => invoke<Takes | null>("get_takes", { id }),
+  saveTakes: (id: string, takes: Takes) => invoke("save_takes", { id, takes }),
 };
 
 export function blankSong(): Song {
