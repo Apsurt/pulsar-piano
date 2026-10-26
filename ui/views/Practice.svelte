@@ -1,26 +1,26 @@
 <script lang="ts">
-  // Practice HUD over the stage: the stage draws the song and its progress; this adds the few controls around it.
+  // Practicing a song. The stage draws the notes and the progress; this screen keeps just the song title,
+  // a play prompt and the score in view. Mode, hands, view and speed live in the Options sheet.
   import { onDestroy, onMount } from "svelte";
   import Segmented from "../lib/Segmented.svelte";
+  import Sheet from "../lib/Sheet.svelte";
+  import TopBar from "../lib/TopBar.svelte";
+  import { nav, openEditor } from "../lib/app.svelte";
   import { onAction } from "../lib/controls";
   import { noteName } from "../lib/keyboard";
   import { live, type SongView } from "../lib/live";
   import { Practice, type Hands, type Mode } from "../lib/practice";
   import type { Song } from "../lib/songs";
 
-  let {
-    song,
-    keyboardHeight,
-    onback,
-    onedit,
-  }: { song: Song; keyboardHeight: number; onback: () => void; onedit: () => void } = $props();
+  let { song, songId }: { song: Song; songId: string } = $props();
 
-  // The app re-creates this view per song, so the song is fixed for its lifetime.
+  // A new screen is created per song, so the song is fixed for its lifetime.
   // svelte-ignore state_referenced_locally
   const practice = new Practice(song);
   live.practice = practice;
   onDestroy(() => {
-    live.practice = null;
+    // The next screen may already have its own practice running.
+    if (live.practice === practice) live.practice = null;
   });
 
   // Mirrors of the practice state, refreshed every frame for the controls.
@@ -35,6 +35,7 @@
   let mode = $state<Mode>("wait");
   let hands = $state<Hands>("both");
   let view = $state<SongView>(live.songView);
+  let optionsOpen = $state(false);
 
   /** Names of the first chord still to play, e.g. "C4 E4". */
   function upcoming(): string {
@@ -118,49 +119,74 @@
 <svelte:window onkeydown={keydown} />
 
 <div class="top">
-  <button class="round" onclick={onback} aria-label="Back to songs">
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
-  </button>
-  <div class="heading">
-    <div class="title">{song.title}</div>
-    {#if song.artist}<div class="dim">{song.artist}</div>{/if}
-  </div>
-  <div class="controls">
-    <Segmented
-      label="Practice mode"
-      value={mode}
-      onchange={setMode}
-      options={[
-        { value: "wait", label: "Wait for me" },
-        { value: "tempo", label: "Tempo" },
-      ]}
-    />
-    <Segmented
-      label="Hands"
-      value={hands}
-      onchange={setHands}
-      disabled={!practice.hasHands}
-      options={[
-        { value: "left", label: "Left" },
-        { value: "both", label: "Both" },
-        { value: "right", label: "Right" },
-      ]}
-    />
-    <Segmented
-      label="View"
-      value={view}
-      onchange={setView}
-      options={[
-        { value: "falling", label: "Falling" },
-        { value: "tape", label: "Notes" },
-      ]}
-    />
-    <button class="pill" onclick={onedit}>Edit</button>
-  </div>
+  <TopBar back={nav.backLabel} onback={() => nav.back()} title={song.title} subtitle={song.artist || undefined}>
+    {#snippet actions()}
+      <div class="anchor">
+        <button class="options" aria-expanded={optionsOpen} onclick={() => (optionsOpen = !optionsOpen)}>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" />
+          </svg>
+          Options
+        </button>
+        <Sheet label="Practice options" open={optionsOpen} onclose={() => (optionsOpen = false)} width={300}>
+          <div class="sheet">
+            <div class="field">
+              <span class="label">Mode</span>
+              <Segmented
+                label="Practice mode"
+                value={mode}
+                onchange={setMode}
+                options={[
+                  { value: "wait", label: "Wait for me" },
+                  { value: "tempo", label: "Keep tempo" },
+                ]}
+              />
+            </div>
+            {#if practice.hasHands}
+              <div class="field">
+                <span class="label">Hands</span>
+                <Segmented
+                  label="Hands"
+                  value={hands}
+                  onchange={setHands}
+                  options={[
+                    { value: "left", label: "Left" },
+                    { value: "both", label: "Both" },
+                    { value: "right", label: "Right" },
+                  ]}
+                />
+              </div>
+            {/if}
+            <div class="field">
+              <span class="label">Show</span>
+              <Segmented
+                label="View"
+                value={view}
+                onchange={setView}
+                options={[
+                  { value: "falling", label: "Falling notes" },
+                  { value: "tape", label: "Note names" },
+                ]}
+              />
+            </div>
+            <div class="field">
+              <span class="label">Speed</span>
+              <div class="stepper" role="group" aria-label="Speed">
+                <button onclick={() => nudgeSpeed(-0.05)} aria-label="Slower">−</button>
+                <span class="mono">{Math.round(speed * 100)}%</span>
+                <button onclick={() => nudgeSpeed(0.05)} aria-label="Faster">+</button>
+              </div>
+            </div>
+            <button class="edit" onclick={() => openEditor(songId)}>Edit notes</button>
+          </div>
+        </Sheet>
+      </div>
+    {/snippet}
+  </TopBar>
 </div>
 
 {#if !playing && !finished}
-  <div class="center" style:bottom="{keyboardHeight}px">
+  <div class="center">
     <button class="big-play" onclick={toggle} aria-label="Play song">
       <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path class="fill" d="M8 5l11 7-11 7z" /></svg>
     </button>
@@ -179,41 +205,33 @@
 {/if}
 
 {#if finished}
-  <div class="center" style:bottom="{keyboardHeight}px">
+  <div class="center">
     <div class="done">
       <div class="score">{accuracy}%</div>
       <div class="dim">{hits} of {total} notes{wrong ? ` · ${wrong} wrong` : ""}</div>
       <div class="row">
         <button class="primary" onclick={() => practice.restart()}>Again</button>
-        <button class="link" onclick={onback}>Songs</button>
+        <button class="link" onclick={() => nav.back()}>Back</button>
       </div>
     </div>
   </div>
 {/if}
 
-<div class="corner left" style:bottom="{keyboardHeight + 14}px">
+<div class="corner">
   {#if playing}
-    <button class="round small" onclick={toggle} aria-label="Pause song">
+    <button class="round" onclick={toggle} aria-label="Pause song">
       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5v14M16 5v14" /></svg>
     </button>
   {/if}
   <span class="chip mono" title="Notes hit / notes to play">
     {hits}/{total}{#if wrong}<span class="wrong">{` · ${wrong}`}</span>{/if}
   </span>
-</div>
-
-<div class="corner right" style:bottom="{keyboardHeight + 14}px">
-  <div class="stepper" role="group" aria-label="Speed">
-    <button onclick={() => nudgeSpeed(-0.05)} aria-label="Slower">−</button>
-    <span class="mono">{Math.round(speed * 100)}%</span>
-    <button onclick={() => nudgeSpeed(0.05)} aria-label="Faster">+</button>
-  </div>
+  {#if speed !== 1}<span class="chip mono">{Math.round(speed * 100)}%</span>{/if}
 </div>
 
 <div
   class="seek"
   bind:this={seekBar}
-  style:bottom="{keyboardHeight - 9}px"
   role="slider"
   tabindex="0"
   aria-label="Song position"
@@ -253,66 +271,79 @@
     cursor: pointer;
     color: var(--snow);
   }
-
   .top {
-    position: absolute;
-    top: 14px;
-    left: 16px;
-    right: 16px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
-  }
-  .heading {
-    min-width: 0;
-    flex: 1;
-  }
-  .title {
-    font-size: 17px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .heading .dim {
-    font-size: 12px;
-  }
-  .controls {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-  .pill {
-    font-size: 12px;
-    font-weight: 500;
-    padding: 8px 14px;
-    border-radius: 999px;
-    border: 1px solid var(--line-strong);
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  .round {
-    width: 38px;
-    height: 38px;
-    display: grid;
-    place-items: center;
-    border-radius: 50%;
-    border: 1px solid var(--line-strong);
-    background: rgba(22, 22, 29, 0.7);
-  }
-  .round.small {
-    width: 30px;
-    height: 30px;
-  }
-
-  .center {
     position: absolute;
     top: 0;
     left: 0;
     right: 0;
+    z-index: 2;
+  }
+  .anchor {
+    position: relative;
+  }
+  .options {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--line-strong);
+    background: rgba(22, 22, 29, 0.6);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .sheet {
+    display: grid;
+    gap: 14px;
+  }
+  .field {
+    display: grid;
+    gap: 6px;
+    justify-items: start;
+  }
+  .label {
+    font-size: 12px;
+    color: var(--mist);
+  }
+  .stepper {
+    display: flex;
+    align-items: center;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 13px;
+  }
+  .stepper button {
+    width: 34px;
+    height: 30px;
+    border: 0;
+    background: transparent;
+    color: var(--mist);
+    font-size: 16px;
+  }
+  .stepper button:hover {
+    color: var(--snow);
+  }
+  .stepper .mono {
+    min-width: 5ch;
+    text-align: center;
+  }
+  .edit {
+    justify-self: start;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: transparent;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .edit:hover {
+    border-color: var(--line-strong);
+  }
+
+  .center {
+    position: absolute;
+    inset: 0;
     display: grid;
     place-content: center;
     justify-items: center;
@@ -361,7 +392,6 @@
   .link:hover {
     color: var(--snow);
   }
-
   .done {
     display: grid;
     justify-items: center;
@@ -395,15 +425,20 @@
 
   .corner {
     position: absolute;
+    left: 20px;
+    bottom: 14px;
     display: flex;
     align-items: center;
     gap: 8px;
   }
-  .corner.left {
-    left: 20px;
-  }
-  .corner.right {
-    right: 20px;
+  .round {
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    background: rgba(22, 22, 29, 0.7);
   }
   .chip {
     font-size: 12px;
@@ -415,34 +450,11 @@
   .wrong {
     color: var(--coral);
   }
-  .stepper {
-    display: flex;
-    align-items: center;
-    border-radius: 999px;
-    border: 1px solid var(--line);
-    background: rgba(22, 22, 29, 0.7);
-    font-size: 12px;
-  }
-  .stepper button {
-    width: 30px;
-    height: 28px;
-    border: 0;
-    background: transparent;
-    color: var(--mist);
-    font-size: 15px;
-  }
-  .stepper button:hover {
-    color: var(--snow);
-  }
-  .stepper .mono {
-    min-width: 4.5ch;
-    text-align: center;
-  }
-
   .seek {
     position: absolute;
     left: 0;
     right: 0;
+    bottom: -9px;
     height: 14px;
     cursor: pointer;
     touch-action: none;

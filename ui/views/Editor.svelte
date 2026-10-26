@@ -4,6 +4,9 @@
   // Changes save automatically.
   import { onDestroy, onMount } from "svelte";
   import Segmented from "../lib/Segmented.svelte";
+  import Sheet from "../lib/Sheet.svelte";
+  import TopBar from "../lib/TopBar.svelte";
+  import { leaveEditor, library, nav } from "../lib/app.svelte";
   import { onAction } from "../lib/controls";
   import { engine } from "../lib/engine";
   import { HIGHEST, LOWEST, layout, noteName, type KeyRect } from "../lib/keyboard";
@@ -11,19 +14,7 @@
   import { NotationError, parseNotation } from "../lib/notation";
   import { blankSong, songs, type Hand, type Song, type SongNote } from "../lib/songs";
 
-  let {
-    id,
-    song,
-    onback,
-    onpractice,
-    onsaved,
-  }: {
-    id: string | null;
-    song: Song | null;
-    onback: () => void;
-    onpractice: (id: string) => void;
-    onsaved: () => void;
-  } = $props();
+  let { id, song }: { id: string | null; song: Song | null } = $props();
 
   // The app re-creates this view per song. The document is a plain object mutated in place;
   // `version` tells the UI something changed.
@@ -114,7 +105,7 @@
       try {
         songId = (await songs.save(songId, doc)).id;
         saveState = "saved";
-        onsaved();
+        library.version++;
       } catch {
         saveState = "failed";
       }
@@ -126,10 +117,14 @@
     save();
   });
 
-  async function practiceNow() {
+  /** Leave for practice (or go back) once the last edits are saved. */
+  async function leave(practice: boolean) {
     await save();
-    if (songId) onpractice(songId);
+    leaveEditor(songId, practice);
   }
+
+  let infoOpen = $state(false);
+  let helpOpen = $state(false);
 
   // ---- Note operations -----------------------------------------------------------------------
 
@@ -505,7 +500,7 @@
       else if (action === "stop") {
         cursor = 0;
         scroll = 0;
-      } else if (action === "play") practiceNow();
+      } else if (action === "play") leave(true);
     });
     let raf = requestAnimationFrame(function frame(now) {
       draw(now);
@@ -520,79 +515,72 @@
   });
 
   const lengths = [
-    { value: "4", label: "Whole" },
-    { value: "2", label: "Half" },
-    { value: "1", label: "Quarter" },
-    { value: "0.5", label: "8th" },
-    { value: "0.25", label: "16th" },
+    { value: "4", label: "1" },
+    { value: "2", label: "1/2" },
+    { value: "1", label: "1/4" },
+    { value: "0.5", label: "1/8" },
+    { value: "0.25", label: "1/16" },
   ];
 </script>
 
 <svelte:window onkeydown={keydown} />
 
 <section class="editor">
-  <div class="bar">
-    <button class="round" onclick={onback} aria-label="Back to songs">
-      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
-    </button>
-    <label class="field title">
-      <span class="sr-only">Title</span>
-      <input bind:value={title} oninput={changed} placeholder="Song title" />
-    </label>
-    <label class="field">
-      <span class="sr-only">Artist</span>
-      <input bind:value={artist} oninput={changed} placeholder="Artist" />
-    </label>
-    <label class="field bpm">
-      <input type="number" min="20" max="300" bind:value={bpm} oninput={changed} />
-      <span class="dim">BPM</span>
-    </label>
-    <Segmented
-      label="Meter"
-      value={meter}
-      onchange={(m) => {
-        meter = m;
-        changed();
-      }}
-      options={[
-        { value: "2/4", label: "2/4" },
-        { value: "3/4", label: "3/4" },
-        { value: "4/4", label: "4/4" },
-        { value: "6/8", label: "6/8" },
-      ]}
-    />
-    <span class="status dim" class:bad={saveState === "failed"} aria-live="polite">
-      {#if saveState === "saving"}Saving…{:else if saveState === "failed"}Couldn't save{:else if saveState === "unsaved"}Edited{:else if songId}Saved{/if}
-    </span>
-    <button class="primary" onclick={practiceNow} disabled={noteCount === 0}>Practice</button>
-  </div>
-
-  <div class="bar tools">
-    <button class="record" class:on={stepInput} onclick={toggleStepInput} aria-pressed={stepInput}>
-      <span class="dot" aria-hidden="true"></span>
-      Step input
-    </button>
-    <Segmented label="Note length" value={stepLength} onchange={(v) => (stepLength = v)} options={lengths} />
-    <button class="toggle" class:on={dotted} aria-pressed={dotted} onclick={() => (dotted = !dotted)}>Dotted</button>
-    <Segmented
-      label="Hand"
-      value={hand}
-      onchange={(v) => (hand = v)}
-      options={[
-        { value: "left", label: "Left hand" },
-        { value: "right", label: "Right hand" },
-      ]}
-    />
-    <button class="ghost" onclick={rest}>Rest</button>
-    <span class="spacer"></span>
-    <button class="ghost icon" onclick={undo} aria-label="Undo">
-      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3" /></svg>
-    </button>
-    <button class="ghost icon" onclick={redo} aria-label="Redo">
-      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 14l5-5-5-5M20 9H9a5 5 0 0 0 0 10h3" /></svg>
-    </button>
-    <button class="toggle" class:on={typing} aria-pressed={typing} onclick={() => (typing = !typing)}>Type notes</button>
-  </div>
+  <TopBar back={nav.backLabel} onback={() => leave(false)}>
+    {#snippet heading()}
+      <label class="title-field">
+        <span class="sr-only">Title</span>
+        <input bind:value={title} oninput={changed} placeholder="Song title" />
+      </label>
+      <span class="status dim" class:bad={saveState === "failed"} aria-live="polite">
+        {#if saveState === "saving"}Saving…{:else if saveState === "failed"}Couldn't save{:else if saveState === "unsaved"}Edited{:else if songId}Saved{/if}
+      </span>
+    {/snippet}
+    {#snippet actions()}
+      <button class="ghost icon" onclick={undo} aria-label="Undo">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3" /></svg>
+      </button>
+      <button class="ghost icon" onclick={redo} aria-label="Redo">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 14l5-5-5-5M20 9H9a5 5 0 0 0 0 10h3" /></svg>
+      </button>
+      <div class="anchor">
+        <button class="ghost" aria-expanded={infoOpen} onclick={() => (infoOpen = !infoOpen)}>Song info</button>
+        <Sheet label="Song info" open={infoOpen} onclose={() => (infoOpen = false)} width={300}>
+          <div class="info">
+            <label class="info-field">
+              <span class="label">Artist</span>
+              <input bind:value={artist} oninput={changed} placeholder="Artist" />
+            </label>
+            <label class="info-field">
+              <span class="label">Tempo</span>
+              <span class="bpm">
+                <input type="number" min="20" max="300" bind:value={bpm} oninput={changed} />
+                <span class="dim">BPM</span>
+              </span>
+            </label>
+            <div class="info-field">
+              <span class="label">Meter</span>
+              <Segmented
+                label="Meter"
+                value={meter}
+                onchange={(m) => {
+                  meter = m;
+                  changed();
+                }}
+                options={[
+                  { value: "2/4", label: "2/4" },
+                  { value: "3/4", label: "3/4" },
+                  { value: "4/4", label: "4/4" },
+                  { value: "6/8", label: "6/8" },
+                ]}
+              />
+            </div>
+          </div>
+        </Sheet>
+      </div>
+      <button class="primary" onclick={() => leave(true)} disabled={noteCount === 0}>Practice</button>
+    {/snippet}
+  </TopBar>
 
   <div class="roll">
     <canvas
@@ -646,12 +634,39 @@
       </form>
     {/if}
 
-    {#if !typing}
-      <div class="hint dim">
-        Click to add · drag to move · drag the top edge to lengthen · right-click to delete · Alt+click moves the
-        cursor · Ctrl+wheel zooms
+    <div class="dock">
+      <button class="record" class:on={stepInput} onclick={toggleStepInput} aria-pressed={stepInput}>
+        <span class="dot" aria-hidden="true"></span>
+        Step input
+      </button>
+      <Segmented label="Note length" value={stepLength} onchange={(v) => (stepLength = v)} options={lengths} />
+      <button class="toggle" class:on={dotted} aria-pressed={dotted} aria-label="Dotted" title="Dotted (×1.5)" onclick={() => (dotted = !dotted)}>·</button>
+      <Segmented
+        label="Hand"
+        value={hand}
+        onchange={(v) => (hand = v)}
+        options={[
+          { value: "left", label: "L" },
+          { value: "right", label: "R" },
+        ]}
+      />
+      <button class="ghost" onclick={rest}>Rest</button>
+      <button class="toggle" class:on={typing} aria-pressed={typing} onclick={() => (typing = !typing)}>Type</button>
+      <div class="anchor">
+        <button class="ghost icon" aria-label="Editing help" aria-expanded={helpOpen} onclick={() => (helpOpen = !helpOpen)}>?</button>
+        <Sheet label="Editing help" open={helpOpen} onclose={() => (helpOpen = false)} width={280} align="right">
+          <ul class="help-list">
+            <li>Click above a key to add a note</li>
+            <li>Drag a note to move it; drag its top edge to lengthen</li>
+            <li>Right-click a note to delete it</li>
+            <li>Alt+click moves the cursor (where new notes go)</li>
+            <li>Ctrl+wheel zooms, wheel scrolls</li>
+            <li>Step input: play a key or chord, it lands at the cursor</li>
+            <li>Ctrl+Z / Ctrl+Y undo and redo</li>
+          </ul>
+        </Sheet>
       </div>
-    {/if}
+    </div>
   </div>
 </section>
 
@@ -670,22 +685,79 @@
     position: absolute;
     inset: 0;
     display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     background: var(--void);
   }
-  .bar {
+  .anchor {
+    position: relative;
+  }
+  .title-field {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+  }
+  .title-field input {
+    flex: 1;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    border-color: transparent;
+    background: transparent;
+    padding: 6px 8px;
+  }
+  .title-field input:hover {
+    border-color: var(--line);
+  }
+  .info {
+    display: grid;
+    gap: 14px;
+  }
+  .info-field {
+    display: grid;
+    gap: 6px;
+    justify-items: start;
+  }
+  .info-field input {
+    width: 100%;
+  }
+  .label {
+    font-size: 12px;
+    color: var(--mist);
+  }
+  .bpm {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 12px 16px 0;
-    flex-wrap: wrap;
+    gap: 8px;
   }
-  .tools {
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--line);
+  .dock {
+    position: absolute;
+    left: 50%;
+    bottom: 34px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px;
+    border-radius: 999px;
+    background: rgba(22, 22, 29, 0.9);
+    border: 1px solid var(--line-strong);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(18px);
+    white-space: nowrap;
   }
-  .spacer {
-    flex: 1;
+  .dock .anchor :global(.sheet) {
+    top: auto;
+    bottom: calc(100% + 10px);
+    transform-origin: bottom right;
+  }
+  .help-list {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 6px;
+    font-size: 13px;
+    line-height: 1.4;
+    white-space: normal;
   }
   button {
     font: inherit;
@@ -697,30 +769,6 @@
   button:disabled {
     opacity: 0.4;
     cursor: default;
-  }
-  .round {
-    width: 36px;
-    height: 36px;
-    flex-shrink: 0;
-    display: grid;
-    place-items: center;
-    border-radius: 50%;
-    border: 1px solid var(--line-strong);
-    background: rgba(22, 22, 29, 0.7);
-  }
-  .field {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .field.title {
-    flex: 1;
-    min-width: 160px;
-  }
-  .field.title input {
-    flex: 1;
-    font-size: 16px;
-    font-weight: 600;
   }
   input,
   textarea {
@@ -873,13 +921,6 @@
   .error {
     font-size: 12px;
     color: var(--coral);
-  }
-  .hint {
-    position: absolute;
-    right: 12px;
-    top: 8px;
-    font-size: 11px;
-    pointer-events: none;
   }
   @keyframes blink {
     50% {
