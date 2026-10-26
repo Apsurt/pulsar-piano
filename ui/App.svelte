@@ -205,7 +205,9 @@
     right: 0;
     pointer-events: none;
   }
-  .view > :global(*) {
+  /* Screens take clicks again, but with zero specificity so a screen's own `pointer-events: none`
+     (like the free-play readout covering everything) always wins. */
+  :global(:where(.view > *)) {
     pointer-events: auto;
   }
   .drop {

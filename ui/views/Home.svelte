@@ -69,8 +69,10 @@
   .dim {
     color: var(--mist);
   }
+  /* Above .center, which covers the whole screen to centre the tiles. */
   .corner {
     position: absolute;
+    z-index: 1;
     top: 16px;
     right: 18px;
     display: flex;
