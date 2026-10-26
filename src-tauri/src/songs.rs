@@ -77,6 +77,20 @@ pub fn rename_song(
     songs.0.rename(&id, &title, &artist)
 }
 
+/// Saves a song from the editor: over `id` if given, else as a new song.
+#[tauri::command]
+pub fn save_song(
+    songs: State<Songs>,
+    id: Option<String>,
+    song: Song,
+) -> Result<SongSummary, String> {
+    let song = song.normalized();
+    match id {
+        Some(id) => songs.0.save(&id, &song),
+        None => songs.0.create(&song),
+    }
+}
+
 #[tauri::command]
 pub fn delete_song(songs: State<Songs>, id: String) -> Result<(), String> {
     songs.0.delete(&id)

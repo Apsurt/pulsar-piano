@@ -92,7 +92,12 @@ impl Library {
                 .unwrap_or("Untitled"),
         );
         let song = from_midi(&bytes, &title)?;
-        self.save(&self.new_id(&title), &song)
+        self.create(&song)
+    }
+
+    /// Stores a new song (e.g. made in the editor) under a fresh id derived from its title.
+    pub fn create(&self, song: &Song) -> Result<SongSummary, String> {
+        self.save(&self.new_id(&song.title), song)
     }
 
     pub fn rename(&self, id: &str, title: &str, artist: &str) -> Result<SongSummary, String> {

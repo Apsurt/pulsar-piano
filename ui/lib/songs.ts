@@ -29,7 +29,20 @@ export const songs = {
   importFiles: (paths: string[]) => invoke<Imported>("import_song_files", { paths }),
   rename: (id: string, title: string, artist: string) => invoke<SongSummary>("rename_song", { id, title, artist }),
   remove: (id: string) => invoke("delete_song", { id }),
+  /** Saves over `id`, or as a new song when `id` is null. */
+  save: (id: string | null, song: Song) => invoke<SongSummary>("save_song", { id, song }),
 };
+
+export function blankSong(): Song {
+  return {
+    version: 1,
+    title: "Untitled",
+    artist: "",
+    tempos: [{ beat: 0, bpm: 90 }],
+    time_signatures: [{ beat: 0, numerator: 4, denominator: 4 }],
+    notes: [],
+  };
+}
 
 /** Seconds from the start of the song to `beat`, following tempo changes (same as Song::seconds_at). */
 export function secondsAt(song: Song, beat: number): number {

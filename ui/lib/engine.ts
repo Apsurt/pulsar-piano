@@ -40,4 +40,6 @@ export const engine = {
   onPedal: (cb: (down: boolean) => void) => on("pedal", cb),
   onDevices: (cb: (devices: MidiDevice[]) => void) => on("devices", cb),
   onInstrument: (cb: (state: InstrumentState) => void) => on("instrument", cb),
+  /** CCs from a controller's control port (transport pads). */
+  onControl: (cb: (control: { controller: number; value: number }) => void) => on("control", cb),
 };

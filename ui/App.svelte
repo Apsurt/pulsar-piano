@@ -7,14 +7,33 @@
   import { live, press, release, heldCount } from "./lib/live";
   import { COMPUTER_KEYS, noteName } from "./lib/keyboard";
   import { songs, type Song } from "./lib/songs";
+  import { actionFor, fire } from "./lib/controls";
+  import Editor from "./views/Editor.svelte";
   import Library from "./views/Library.svelte";
   import Practice from "./views/Practice.svelte";
 
-  type View = "play" | "songs" | "practice";
+  type View = "play" | "songs" | "practice" | "edit";
   let view = $state<View>("play");
   let openSong = $state<{ id: string; song: Song } | null>(null);
+  /** The editor's target: an existing song or a new one; `key` re-creates the editor per open. */
+  let editing = $state<{ id: string | null; song: Song | null; key: number } | null>(null);
   let libraryRefresh = $state(0);
   let dropping = $state(false);
+
+  function openEditor(id: string | null) {
+    if (!id) {
+      editing = { id: null, song: null, key: Date.now() };
+      view = "edit";
+      return;
+    }
+    songs
+      .get(id)
+      .then((song) => {
+        editing = { id, song, key: Date.now() };
+        view = "edit";
+      })
+      .catch((e) => showError(String(e)));
+  }
 
   function openPractice(id: string) {
     songs
@@ -131,6 +150,11 @@
           release(key);
         }
         held = heldCount();
+        live.noteListener?.(key, velocity);
+      }),
+      engine.onControl(({ controller, value }) => {
+        const action = actionFor(controller, value);
+        if (action) fire(action);
       }),
       engine.onPedal((isDown) => (live.sustain = sustain = isDown)),
       engine.onDevices((d) => (devices = d)),
@@ -183,6 +207,9 @@
           <button class="song-tab" class:on={view === "practice"} aria-current={view === "practice"} onclick={() => (view = "practice")}>
             {openSong.song.title}
           </button>
+        {/if}
+        {#if view === "edit"}
+          <button class="on" aria-current="true">Editor</button>
         {/if}
       </nav>
     </div>
@@ -256,13 +283,32 @@
 
     {#if view === "songs"}
       <div class="panel" style:bottom="{keyboardHeight}px">
-        <Library refresh={libraryRefresh} onopen={openPractice} onerror={showError} />
+        <Library refresh={libraryRefresh} onopen={openPractice} onedit={openEditor} onerror={showError} />
       </div>
     {/if}
 
     {#if openSong && view === "practice"}
       {#key openSong.id}
-        <Practice song={openSong.song} onback={() => (view = "songs")} />
+        <Practice
+          song={openSong.song}
+          {keyboardHeight}
+          onback={() => (view = "songs")}
+          onedit={() => openSong && openEditor(openSong.id)}
+        />
+      {/key}
+    {/if}
+
+    {#if editing && view === "edit"}
+      {#key editing.key}
+        <div class="panel" style:bottom="{keyboardHeight}px">
+          <Editor
+            id={editing.id}
+            song={editing.song}
+            onback={() => (view = "songs")}
+            onpractice={openPractice}
+            onsaved={() => libraryRefresh++}
+          />
+        </div>
       {/key}
     {/if}
 
@@ -373,7 +419,8 @@
   .instruments {
     display: flex;
     gap: 8px;
-    justify-content: center;
+    /* "safe" keeps the first pill reachable when the row overflows and scrolls. */
+    justify-content: safe center;
     overflow-x: auto;
     scrollbar-width: none;
     padding: 8px 4px;

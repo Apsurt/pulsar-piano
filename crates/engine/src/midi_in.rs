@@ -20,16 +20,25 @@ pub struct MidiDevice {
 }
 
 /// The single entry point for every event, whatever its source: audio first, then the UI.
+/// Control-port events (transport pads and the like) never make sound.
 pub(crate) fn dispatch(
     input: &Mutex<Producer<MidiEvent>>,
     events: &mpsc::Sender<EngineEvent>,
     event: MidiEvent,
     source: Source,
 ) {
-    if let Ok(mut queue) = input.lock() {
+    if source != Source::Control
+        && let Ok(mut queue) = input.lock()
+    {
         let _ = queue.push(event);
     }
     let _ = events.send(EngineEvent::Midi(event, source));
+}
+
+/// Controllers expose a separate "DAW" port for transport pads and host integration;
+/// its messages are commands for the app, not notes to play.
+fn is_control_port(name: &str) -> bool {
+    name.to_lowercase().contains("daw")
 }
 
 pub(crate) fn spawn_housekeeping(
@@ -59,7 +68,8 @@ pub(crate) fn spawn_housekeeping(
                 connections.retain(|(name, _)| ports.iter().any(|(n, _)| n == name));
                 for (name, id) in &ports {
                     if !connections.iter().any(|(n, _)| n == name)
-                        && let Some(conn) = connect(id, input.clone(), events.clone())
+                        && let Some(conn) =
+                            connect(id, is_control_port(name), input.clone(), events.clone())
                     {
                         connections.push((name.clone(), conn));
                     }
@@ -89,18 +99,24 @@ pub(crate) fn spawn_housekeeping(
 
 fn connect(
     id: &str,
+    control: bool,
     input: Arc<Mutex<Producer<MidiEvent>>>,
     events: mpsc::Sender<EngineEvent>,
 ) -> Option<MidiInputConnection<()>> {
     let mut midi = MidiInput::new("Pulsar").ok()?;
     midi.ignore(Ignore::All);
     let port = midi.find_port_by_id(id)?;
+    let source = if control {
+        Source::Control
+    } else {
+        Source::Device
+    };
     midi.connect(
         &port,
         "pulsar-in",
         move |_, bytes, _| {
             if let Some(event) = MidiEvent::parse(bytes) {
-                dispatch(&input, &events, event, Source::Device);
+                dispatch(&input, &events, event, source);
             }
         },
         (),

@@ -4,10 +4,13 @@
 
   let {
     onopen,
+    onedit,
     onerror,
     refresh = 0,
   }: {
     onopen: (id: string) => void;
+    /** Open the editor: for a song, or for a new one when null. */
+    onedit: (id: string | null) => void;
     onerror: (message: string) => void;
     /** Bumped by the app after songs are dropped onto the window. */
     refresh?: number;
@@ -103,7 +106,8 @@
           <input type="search" placeholder="Search" bind:value={query} />
         </label>
       {/if}
-      <button class="primary" onclick={importSongs} disabled={importing}>Import MIDI</button>
+      <button onclick={importSongs} disabled={importing}>Import MIDI</button>
+      <button class="primary" onclick={() => onedit(null)}>New song</button>
     </div>
   </header>
 
@@ -111,10 +115,13 @@
     <div class="empty">
       <h2>No songs yet</h2>
       <p class="dim">
-        Find a MIDI file of a song you want to learn (searching "<em>song name</em> piano midi" usually works), then
-        import it or drop it onto this window.
+        Make one from scratch, or find a MIDI file of a song you want to learn (searching "<em>song name</em> piano
+        midi" usually works) and import it or drop it onto this window.
       </p>
-      <button class="primary" onclick={importSongs} disabled={importing}>Import MIDI</button>
+      <div class="actions">
+        <button class="primary" onclick={() => onedit(null)}>New song</button>
+        <button onclick={importSongs} disabled={importing}>Import MIDI</button>
+      </div>
     </div>
   {:else}
     <ul>
@@ -142,6 +149,7 @@
               </span>
             </button>
             <div class="row-actions">
+              <button class="ghost small" onclick={() => onedit(song.id)}>Edit</button>
               <button class="ghost small" onclick={() => startEdit(song)}>Rename</button>
               <button
                 class="ghost small"

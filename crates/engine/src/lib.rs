@@ -25,10 +25,14 @@ pub use midi_in::MidiDevice;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Where an event came from: a MIDI device, or the app itself (on-screen / computer keys).
+/// Where an event came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
+    /// A MIDI keyboard's playing port.
     Device,
+    /// A controller's control port (e.g. Arturia "DAW" port): transport pads; never played.
+    Control,
+    /// The app itself: on-screen or computer keys.
     App,
 }
 

@@ -34,8 +34,8 @@
   const TAPE = 120;
   const PLAYHEAD = 0.28;
   /** Room the practice controls take at the top of the stage, and the gap kept above the keyboard. */
-  const OVERLAY_TOP = 160;
-  const OVERLAY_BOTTOM = 16;
+  const OVERLAY_TOP = 72;
+  const OVERLAY_BOTTOM = 48;
 
   const rgba = (c: RGB, a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
   const mix = (a: RGB, b: RGB, t: number) =>
@@ -95,7 +95,23 @@
     ctx.globalCompositeOperation = "source-over";
 
     drawKeyboard(dt);
-    if (practice) drawGuides(practice, now);
+    if (practice) {
+      drawGuides(practice, now);
+      drawProgress(practice);
+    }
+  }
+
+  /** Song progress as light along the keyboard's top edge. */
+  function drawProgress(p: Practice) {
+    const span = p.duration - p.startTime || 1;
+    const x = Math.max(0, Math.min(1, (p.time - p.startTime) / span)) * w;
+    ctx.fillStyle = "rgba(255,255,255,0.07)";
+    ctx.fillRect(x, kbY - 3, w - x, 3);
+    ctx.shadowColor = rgba(PULSE, 0.9);
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = rgba(TINT, 0.95);
+    ctx.fillRect(0, kbY - 3, x, 3);
+    ctx.shadowBlur = 0;
   }
 
   const handColor = (n: PracticeNote): RGB => (n.hand === "left" ? AMBER : PULSE);

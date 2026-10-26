@@ -44,6 +44,13 @@ struct Note {
     device: bool,
 }
 
+/// A control-port CC, e.g. a transport pad (127 pressed, 0 released).
+#[derive(Clone, Serialize)]
+struct Control {
+    controller: u8,
+    value: u8,
+}
+
 #[derive(Clone, Serialize)]
 struct InstrumentState {
     state: &'static str,
@@ -158,6 +165,13 @@ fn forward_events(app: AppHandle, events: Receiver<EngineEvent>) {
     std::thread::spawn(move || {
         for event in events {
             let _ = match event {
+                EngineEvent::Midi(
+                    MidiEvent::ControlChange {
+                        controller, value, ..
+                    },
+                    Source::Control,
+                ) => app.emit("control", Control { controller, value }),
+                EngineEvent::Midi(_, Source::Control) => Ok(()),
                 EngineEvent::Midi(MidiEvent::NoteOn { key, velocity, .. }, source) => {
                     let device = source == Source::Device;
                     app.emit(
@@ -290,6 +304,7 @@ pub fn run() {
             songs::import_songs_dialog,
             songs::import_song_files,
             songs::rename_song,
+            songs::save_song,
             songs::delete_song
         ])
         .run(tauri::generate_context!())

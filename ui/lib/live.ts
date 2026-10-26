@@ -16,6 +16,8 @@ export const live = {
   /** The song being practiced; the stage draws it instead of free-play beams. */
   practice: null as Practice | null,
   songView: "falling" as SongView,
+  /** Called for every note on/off (velocity 0) after the state above is updated; the editor uses it for step entry. */
+  noteListener: null as ((key: number, velocity: number) => void) | null,
 };
 
 export function press(key: number, velocity: number) {
