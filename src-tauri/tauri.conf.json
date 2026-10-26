@@ -17,11 +17,13 @@
         "width": 1200,
         "height": 760,
         "minWidth": 800,
-        "minHeight": 500
+        "minHeight": 500,
+        "theme": "Dark",
+        "backgroundColor": "#0A0A0F"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: asset: http://asset.localhost"
     }
   },
   "bundle": {

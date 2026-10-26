@@ -6,7 +6,8 @@ const host = process.env.TAURI_DEV_HOST;
 // https://v2.tauri.app/start/frontend/vite/
 export default defineConfig({
   root: "ui",
-  plugins: [svelte()],
+  // The config lives at the repo root, not in `root`, so point at it explicitly.
+  plugins: [svelte({ configFile: "../svelte.config.js" })],
   clearScreen: false,
   build: {
     outDir: "../dist",

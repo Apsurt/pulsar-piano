@@ -6,3 +6,8 @@ repository.workspace = true
 description = "Pulsar's MIDI + audio engine. Pure Rust, no Tauri dependency."
 
 [dependencies]
+cpal = "0.18.2"
+midir = "0.11.1"
+rtrb = "0.4.1"
+rustysynth = "1.3.8"
+serde = { version = "1.0.229", features = ["derive"] }

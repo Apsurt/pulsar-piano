@@ -1,26 +1,117 @@
+mod settings;
+
+use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
+
+use pulsar_engine::{CC_SUSTAIN, Engine, EngineEvent, InstrumentInfo, MidiEvent, Status};
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::UpdaterExt;
 
-#[derive(Serialize)]
-struct Ping {
-    app: String,
-    engine: &'static str,
-    flavor: &'static str,
+use settings::Settings;
+
+/// The audio engine runs on its own threads; the shell only forwards commands and events.
+struct Pulsar {
+    engine: Result<Arc<Engine>, String>,
+    settings: Mutex<Settings>,
+    settings_path: PathBuf,
 }
 
-/// Connection check: proves the webview can call into Rust and that the engine crate is linked.
-#[tauri::command]
-fn ping(app: AppHandle) -> Ping {
-    Ping {
-        app: app.package_info().version.to_string(),
-        engine: pulsar_engine::VERSION,
-        flavor: if cfg!(debug_assertions) {
-            "dev"
-        } else {
-            "release"
-        },
+impl Pulsar {
+    fn engine(&self) -> Result<&Arc<Engine>, String> {
+        self.engine
+            .as_ref()
+            .map_err(|e| format!("audio engine unavailable: {e}"))
     }
+
+    fn update_settings(&self, edit: impl FnOnce(&mut Settings)) {
+        if let Ok(mut settings) = self.settings.lock() {
+            edit(&mut settings);
+            settings.save(&self.settings_path);
+        }
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct Note {
+    key: u8,
+    /// 0 means released.
+    velocity: u8,
+}
+
+#[derive(Clone, Serialize)]
+struct InstrumentState {
+    state: &'static str,
+    instrument: InstrumentInfo,
+    error: Option<String>,
+}
+
+#[tauri::command]
+fn status(pulsar: State<Pulsar>) -> Result<Status, String> {
+    Ok(pulsar.engine()?.status())
+}
+
+#[tauri::command]
+fn instruments(pulsar: State<Pulsar>) -> Result<Vec<InstrumentInfo>, String> {
+    Ok(pulsar.engine()?.instruments())
+}
+
+#[tauri::command]
+async fn load_instrument(app: AppHandle, id: String) -> Result<InstrumentInfo, String> {
+    let pulsar = app.state::<Pulsar>();
+    let engine = pulsar.engine()?.clone();
+    let info = tauri::async_runtime::spawn_blocking(move || engine.load_instrument(&id))
+        .await
+        .map_err(|e| e.to_string())??;
+    pulsar.update_settings(|s| s.instrument = Some(info.id.clone()));
+    Ok(info)
+}
+
+/// On-screen and computer-keyboard input. Hardware MIDI never comes through here.
+#[tauri::command]
+fn note(pulsar: State<Pulsar>, key: u8, velocity: u8) -> Result<(), String> {
+    let key = key.min(127);
+    pulsar.engine()?.send(match velocity.min(127) {
+        0 => MidiEvent::NoteOff {
+            channel: 0,
+            key,
+            velocity: 0,
+        },
+        velocity => MidiEvent::NoteOn {
+            channel: 0,
+            key,
+            velocity,
+        },
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn pedal(pulsar: State<Pulsar>, down: bool) -> Result<(), String> {
+    let value = if down { 127 } else { 0 };
+    pulsar.engine()?.send(MidiEvent::ControlChange {
+        channel: 0,
+        controller: CC_SUSTAIN,
+        value,
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn set_volume(pulsar: State<Pulsar>, db: f32) -> Result<(), String> {
+    pulsar.engine()?.set_volume_db(db);
+    pulsar.update_settings(|s| s.volume_db = db);
+    Ok(())
+}
+
+#[tauri::command]
+fn open_sounds_folder(app: AppHandle, pulsar: State<Pulsar>) -> Result<(), String> {
+    let dir = pulsar.engine()?.status().sounds_dir;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 /// Returns the newer version on GitHub Releases, if any. Dev builds never update.
@@ -59,6 +150,68 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     app.restart()
 }
 
+/// Turns engine events into webview events. Only what the UI draws is forwarded.
+fn forward_events(app: AppHandle, events: Receiver<EngineEvent>) {
+    std::thread::spawn(move || {
+        for event in events {
+            let _ = match event {
+                EngineEvent::Midi(MidiEvent::NoteOn { key, velocity, .. }) => {
+                    app.emit("note", Note { key, velocity })
+                }
+                EngineEvent::Midi(MidiEvent::NoteOff { key, .. }) => {
+                    app.emit("note", Note { key, velocity: 0 })
+                }
+                EngineEvent::Midi(MidiEvent::ControlChange {
+                    controller: CC_SUSTAIN,
+                    value,
+                    ..
+                }) => app.emit("pedal", value >= 64),
+                EngineEvent::Midi(_) => Ok(()),
+                EngineEvent::Devices(devices) => app.emit("devices", devices),
+                EngineEvent::InstrumentLoading(instrument) => app.emit(
+                    "instrument",
+                    InstrumentState {
+                        state: "loading",
+                        instrument,
+                        error: None,
+                    },
+                ),
+                EngineEvent::InstrumentChanged(instrument) => app.emit(
+                    "instrument",
+                    InstrumentState {
+                        state: "ready",
+                        instrument,
+                        error: None,
+                    },
+                ),
+                EngineEvent::InstrumentFailed { instrument, error } => app.emit(
+                    "instrument",
+                    InstrumentState {
+                        state: "failed",
+                        instrument,
+                        error: Some(error),
+                    },
+                ),
+            };
+        }
+    });
+}
+
+/// Loads the last-used instrument, else the first SoundFont, else the built-in synth.
+fn restore_instrument(engine: Arc<Engine>, saved: Option<String>) {
+    std::thread::spawn(move || {
+        let available = engine.instruments();
+        let id = saved
+            .filter(|id| available.iter().any(|i| &i.id == id))
+            .or_else(|| available.first().map(|i| i.id.clone()));
+        if let Some(id) = id
+            && let Err(e) = engine.load_instrument(&id)
+        {
+            eprintln!("could not load {id}: {e}");
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -70,7 +223,43 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![ping, check_update, install_update])
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let data = app.path().app_data_dir()?;
+            let sounds = data.join("sounds");
+            eprintln!("sounds folder: {}", sounds.display());
+            std::fs::create_dir_all(&sounds)?;
+            let settings_path = data.join("settings.toml");
+            let settings = Settings::load(&settings_path);
+
+            let engine = Engine::start(sounds).map(|(engine, events)| {
+                let engine = Arc::new(engine);
+                forward_events(app.handle().clone(), events);
+                engine.set_volume_db(settings.volume_db);
+                restore_instrument(engine.clone(), settings.instrument.clone());
+                engine
+            });
+            if let Err(e) = &engine {
+                eprintln!("audio engine failed to start: {e}");
+            }
+            app.manage(Pulsar {
+                engine,
+                settings: Mutex::new(settings),
+                settings_path,
+            });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            status,
+            instruments,
+            load_instrument,
+            note,
+            pedal,
+            set_volume,
+            open_sounds_folder,
+            check_update,
+            install_update
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
