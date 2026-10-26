@@ -1,14 +1,18 @@
 // Song library bridge and song timing. Mirrors crates/song.
 import { invoke } from "@tauri-apps/api/core";
 
-export type Hand = "left" | "right";
-export type SongNote = { key: number; start: number; length: number; velocity: number; hand: Hand | null };
+/** A part you can choose to play or leave out: a hand, a melody, an accompaniment. */
+export type Track = { name: string };
+/** `track` indexes Song.tracks. */
+export type SongNote = { key: number; start: number; length: number; velocity: number; track: number };
 export type Song = {
   version: number;
   title: string;
   artist: string;
   tempos: { beat: number; bpm: number }[];
   time_signatures: { beat: number; numerator: number; denominator: number }[];
+  /** At least one. */
+  tracks: Track[];
   notes: SongNote[];
 };
 export type SongSummary = {
@@ -17,7 +21,7 @@ export type SongSummary = {
   artist: string;
   notes: number;
   seconds: number;
-  hands: boolean;
+  tracks: number;
   modified: number;
 };
 export type Imported = { songs: SongSummary[]; errors: string[] };
@@ -35,11 +39,12 @@ export const songs = {
 
 export function blankSong(): Song {
   return {
-    version: 1,
+    version: 2,
     title: "Untitled",
     artist: "",
     tempos: [{ beat: 0, bpm: 90 }],
     time_signatures: [{ beat: 0, numerator: 4, denominator: 4 }],
+    tracks: [{ name: "Right hand" }, { name: "Left hand" }],
     notes: [],
   };
 }
@@ -72,3 +77,18 @@ export function formatTime(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
+
+export type RGB = [number, number, number];
+
+/** Track colours, in order; the first two match the old right (pulse) and left (amber) hands. */
+const TRACK_COLORS: RGB[] = [
+  [127, 212, 255],
+  [255, 181, 71],
+  [190, 150, 255],
+  [110, 231, 183],
+  [255, 128, 191],
+  [214, 232, 110],
+];
+
+export const trackColor = (track: number): RGB => TRACK_COLORS[track % TRACK_COLORS.length];
+export const trackCss = (track: number) => `rgb(${trackColor(track).join(",")})`;

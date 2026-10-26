@@ -1,11 +1,11 @@
 // Practice logic: where the song is, which notes are due, and whether they were played. No drawing here.
-import { barTimes, secondsAt, type Hand, type Song } from "./songs";
+import { barTimes, secondsAt, type Song } from "./songs";
 
 export type Mode = "wait" | "tempo";
-export type Hands = "both" | Hand;
 export type NoteState = "pending" | "hit" | "missed";
 
-export type PracticeNote = { key: number; start: number; end: number; hand: Hand | null; state: NoteState };
+/** `track` indexes Song.tracks. */
+export type PracticeNote = { key: number; start: number; end: number; track: number; state: NoteState };
 /** Notes that start together: a chord, or a single note. */
 export type Chord = { start: number; notes: PracticeNote[] };
 
@@ -23,7 +23,8 @@ export class Practice {
   readonly chords: Chord[];
   readonly bars: number[];
   readonly duration: number;
-  readonly hasHands: boolean;
+  /** Track names, and how many notes each has. */
+  readonly tracks: { name: string; notes: number }[];
   /** When the first note starts, in song seconds. */
   private readonly firstNote: number;
 
@@ -40,7 +41,8 @@ export class Practice {
   passes = 0;
   lastScore: number | null = null;
   mode: Mode = "wait";
-  hands: Hands = "both";
+  /** The tracks you play; the rest are shown faintly and left out of the score. */
+  played: Set<number>;
   hits = 0;
   wrong = 0;
   /** performance.now() of the last wrong press per key, for a brief flash. */
@@ -54,7 +56,7 @@ export class Practice {
       key: n.key,
       start: secondsAt(song, n.start),
       end: secondsAt(song, n.start + n.length),
-      hand: n.hand,
+      track: n.track,
       state: "pending" as NoteState,
     }));
     this.chords = [];
@@ -66,7 +68,8 @@ export class Practice {
     const endBeat = Math.max(0, ...song.notes.map((n) => n.start + n.length));
     this.bars = barTimes(song, endBeat);
     this.duration = Math.max(0, ...this.notes.map((n) => n.end));
-    this.hasHands = this.notes.some((n) => n.hand !== null);
+    this.tracks = song.tracks.map((t, i) => ({ name: t.name, notes: song.notes.filter((n) => n.track === i).length }));
+    this.played = new Set(this.tracks.keys());
     this.firstNote = this.chords[0]?.start ?? 0;
     this.leadIn = Math.max(0, leadIn);
     this.time = this.startTime;
@@ -94,7 +97,7 @@ export class Practice {
   }
 
   isActive(note: PracticeNote): boolean {
-    return this.hands === "both" || note.hand === null || note.hand === this.hands;
+    return this.played.has(note.track);
   }
 
   get total(): number {
@@ -189,8 +192,10 @@ export class Practice {
     this.seek(this.time);
   }
 
-  setHands(hands: Hands) {
-    this.hands = hands;
+  /** Which tracks to play; unknown ones are dropped, and nothing selected means all of them. */
+  setPlayed(tracks: Iterable<number>) {
+    const played = [...tracks].filter((t) => t >= 0 && t < this.tracks.length);
+    this.played = new Set(played.length ? played : this.tracks.keys());
     this.recount();
   }
 

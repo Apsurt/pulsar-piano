@@ -1,16 +1,16 @@
 //! Standard MIDI File import.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 
-use crate::{FORMAT_VERSION, Hand, Note, Song, TempoChange, TimeSignature};
+use crate::{FORMAT_VERSION, Note, Song, TempoChange, TimeSignature, Track};
 
 /// General MIDI drums live on channel 10 (index 9); they aren't piano notes.
 const DRUM_CHANNEL: u8 = 9;
 
-/// Reads a .mid file. With exactly two note-carrying parts (tracks, or channels within a track),
-/// the lower-pitched part becomes the left hand and the other the right.
+/// Reads a .mid file. Every note-carrying part (a MIDI track, or a channel within one) becomes a track,
+/// named after the MIDI track. Two parts without names of their own are taken to be the hands.
 pub fn from_midi(bytes: &[u8], title: &str) -> Result<Song, String> {
     let smf = Smf::parse(bytes).map_err(|e| format!("not a readable MIDI file ({e})"))?;
     let ppq = match smf.header.timing {
@@ -22,7 +22,9 @@ pub fn from_midi(bytes: &[u8], title: &str) -> Result<Song, String> {
 
     let mut tempos = Vec::new();
     let mut time_signatures = Vec::new();
-    let mut parts: HashMap<(usize, u8), Vec<Note>> = HashMap::new();
+    // Keyed by (MIDI track, channel), so parts come out in file order.
+    let mut parts: BTreeMap<(usize, u8), Vec<Note>> = BTreeMap::new();
+    let mut track_names: Vec<Option<String>> = vec![None; smf.tracks.len()];
 
     for (track_index, track) in smf.tracks.iter().enumerate() {
         let mut tick = 0u64;
@@ -41,6 +43,14 @@ pub fn from_midi(bytes: &[u8], title: &str) -> Result<Song, String> {
                         numerator: numerator.max(1),
                         denominator: 1u8.checked_shl(power as u32).unwrap_or(4),
                     })
+                }
+                TrackEventKind::Meta(
+                    MetaMessage::TrackName(name) | MetaMessage::InstrumentName(name),
+                ) if track_names[track_index].is_none() => {
+                    let name = String::from_utf8_lossy(name).trim().to_owned();
+                    if !name.is_empty() {
+                        track_names[track_index] = Some(name);
+                    }
                 }
                 TrackEventKind::Midi { channel, message } => {
                     let channel = channel.as_int();
@@ -78,14 +88,12 @@ pub fn from_midi(bytes: &[u8], title: &str) -> Result<Song, String> {
         }
     }
 
-    let mut parts: Vec<Vec<Note>> = parts.into_values().collect();
-    if parts.len() == 2 {
-        parts.sort_by(|a, b| average_key(a).total_cmp(&average_key(b)));
-        for (part, hand) in parts.iter_mut().zip([Hand::Left, Hand::Right]) {
-            part.iter_mut().for_each(|n| n.hand = Some(hand));
-        }
-    }
-    let notes: Vec<Note> = parts.into_iter().flatten().collect();
+    let (tracks, parts) = name_parts(parts, &track_names);
+    let notes: Vec<Note> = parts
+        .into_iter()
+        .enumerate()
+        .flat_map(|(track, part)| part.into_iter().map(move |n| Note { track, ..n }))
+        .collect();
     if notes.is_empty() {
         return Err("this MIDI file has no notes to play".into());
     }
@@ -96,9 +104,46 @@ pub fn from_midi(bytes: &[u8], title: &str) -> Result<Song, String> {
         artist: String::new(),
         tempos,
         time_signatures,
+        tracks,
         notes,
     }
     .normalized())
+}
+
+/// A track per part, named after its MIDI track (plus the channel when one MIDI track has several).
+/// Exactly two parts that share a name, or have none, become "Right hand" (the higher) and "Left hand".
+fn name_parts(
+    parts: BTreeMap<(usize, u8), Vec<Note>>,
+    track_names: &[Option<String>],
+) -> (Vec<Track>, Vec<Vec<Note>>) {
+    let name_of = |track: usize| track_names.get(track).cloned().flatten();
+    let keys: Vec<(usize, u8)> = parts.keys().copied().collect();
+    let mut parts: Vec<Vec<Note>> = parts.into_values().collect();
+
+    if let [(a, _), (b, _)] = keys[..]
+        && name_of(a) == name_of(b)
+    {
+        parts.sort_by(|x, y| average_key(y).total_cmp(&average_key(x)));
+        return (
+            vec![Track::new("Right hand"), Track::new("Left hand")],
+            parts,
+        );
+    }
+
+    let tracks = keys
+        .iter()
+        .enumerate()
+        .map(|(i, &(track, channel))| {
+            let shared = keys.iter().filter(|(t, _)| *t == track).count() > 1;
+            Track::new(match name_of(track) {
+                Some(name) if shared => format!("{name} (channel {})", channel + 1),
+                Some(name) => name,
+                None if keys.len() == 1 => "Piano".into(),
+                None => format!("Track {}", i + 1),
+            })
+        })
+        .collect();
+    (tracks, parts)
 }
 
 fn note(key: u8, start: u64, end: u64, velocity: u8, ppq: f64) -> Note {
@@ -107,7 +152,7 @@ fn note(key: u8, start: u64, end: u64, velocity: u8, ppq: f64) -> Note {
         start: start as f64 / ppq,
         length: end.saturating_sub(start) as f64 / ppq,
         velocity,
-        hand: None,
+        track: 0,
     }
 }
 
@@ -196,16 +241,55 @@ pub(crate) mod tests {
         let notes: Vec<_> = song
             .notes
             .iter()
-            .map(|n| (n.key, n.start, n.length, n.hand))
+            .map(|n| (n.key, n.start, n.length, n.track))
             .collect();
         assert_eq!(
+            song.tracks,
+            vec![Track::new("Right hand"), Track::new("Left hand")]
+        );
+        assert_eq!(
             notes,
+            vec![(48, 0.0, 2.0, 1), (64, 0.0, 1.0, 0), (67, 1.0, 0.5, 0)]
+        );
+    }
+
+    #[test]
+    fn named_parts_become_named_tracks() {
+        let bytes = smf(vec![
             vec![
-                (48, 0.0, 2.0, Some(Hand::Left)),
-                (64, 0.0, 1.0, Some(Hand::Right)),
-                (67, 1.0, 0.5, Some(Hand::Right)),
+                meta(0, MetaMessage::TrackName(b"Melody")),
+                on(0, 0, 72, 100),
+                on(480, 0, 72, 0),
+            ],
+            vec![
+                meta(0, MetaMessage::TrackName(b"Bass")),
+                on(0, 1, 36, 100),
+                on(480, 1, 36, 0),
+            ],
+            // One MIDI track playing on two channels: a track per channel.
+            vec![
+                meta(0, MetaMessage::TrackName(b"Pads ")),
+                on(0, 2, 60, 100),
+                on(0, 3, 64, 100),
+                on(480, 2, 60, 0),
+                on(0, 3, 64, 0),
+            ],
+            vec![on(0, 4, 50, 100), on(480, 4, 50, 0)],
+        ]);
+        let song = from_midi(&bytes, "t").unwrap();
+        let names: Vec<_> = song.tracks.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Melody",
+                "Bass",
+                "Pads (channel 3)",
+                "Pads (channel 4)",
+                "Track 5"
             ]
         );
+        let tracks: Vec<_> = song.notes.iter().map(|n| (n.key, n.track)).collect();
+        assert_eq!(tracks, vec![(36, 1), (50, 4), (60, 2), (64, 3), (72, 0)]);
     }
 
     #[test]
@@ -218,7 +302,7 @@ pub(crate) mod tests {
         let song = from_midi(&bytes, "t").unwrap();
         let spans: Vec<_> = song.notes.iter().map(|n| (n.start, n.length)).collect();
         assert_eq!(spans, vec![(0.0, 0.5), (0.5, 0.5)]);
-        assert!(!song.has_hands());
+        assert_eq!(song.tracks, vec![Track::new("Piano")]);
     }
 
     #[test]

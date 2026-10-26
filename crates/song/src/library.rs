@@ -16,7 +16,7 @@ pub struct SongSummary {
     pub artist: String,
     pub notes: usize,
     pub seconds: f64,
-    pub hands: bool,
+    pub tracks: usize,
     /// Last change, in Unix milliseconds.
     pub modified: u64,
 }
@@ -58,8 +58,7 @@ impl Library {
 
     pub fn load(&self, id: &str) -> Result<Song, String> {
         let text = fs::read_to_string(self.path(id)?).map_err(|e| e.to_string())?;
-        let song: Song = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-        Ok(song.normalized())
+        Song::from_json(&text)
     }
 
     /// Writes atomically (temp file, then rename) so a crash never leaves half a song.
@@ -182,7 +181,7 @@ fn summarize(id: String, song: &Song, path: &Path) -> SongSummary {
         artist: song.artist.clone(),
         notes: song.notes.len(),
         seconds: song.seconds_at(song.end_beat()),
-        hands: song.has_hands(),
+        tracks: song.tracks.len(),
         modified,
     }
 }

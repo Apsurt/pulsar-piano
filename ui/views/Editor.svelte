@@ -2,7 +2,7 @@
   // Song editor: a piano roll laid out like the falling-notes view (keys along the bottom, time going up),
   // with three ways in: click/drag on the roll, step entry from the keyboard, and typed note names.
   // Changes save automatically.
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import Segmented from "../lib/Segmented.svelte";
   import Sheet from "../lib/Sheet.svelte";
   import TopBar from "../lib/TopBar.svelte";
@@ -12,7 +12,7 @@
   import { HIGHEST, LOWEST, layout, noteName, type KeyRect } from "../lib/keyboard";
   import { heldCount, live } from "../lib/live";
   import { NotationError, parseNotation } from "../lib/notation";
-  import { blankSong, songs, type Hand, type Song, type SongNote } from "../lib/songs";
+  import { blankSong, songs, trackColor, trackCss, type Song, type SongNote } from "../lib/songs";
 
   let { id, song }: { id: string | null; song: Song | null } = $props();
 
@@ -27,6 +27,10 @@
     void version;
     return doc.notes.length;
   });
+  const trackList = $derived.by(() => {
+    void version;
+    return doc.tracks.map((t, i) => ({ name: t.name, notes: doc.notes.filter((n) => n.track === i).length }));
+  });
 
   let title = $state(doc.title);
   let artist = $state(doc.artist);
@@ -36,7 +40,8 @@
   /** Lengths in beats (quarter notes). */
   let stepLength = $state("1");
   let dotted = $state(false);
-  let hand = $state<Hand>("right");
+  /** The track new notes go on. */
+  let track = $state(0);
   /** Where step entry and typed notes go, in beats. */
   let cursor = $state(0);
   let stepInput = $state(false);
@@ -56,9 +61,9 @@
 
   const undoStack: string[] = [];
   const redoStack: string[] = [];
-  const snapshot = () => JSON.stringify(doc.notes);
+  const snapshot = () => JSON.stringify({ notes: doc.notes, tracks: doc.tracks });
 
-  /** Call before a change to the notes, so it can be undone. */
+  /** Call before a change to the notes or tracks, so it can be undone. */
   function remember() {
     undoStack.push(snapshot());
     if (undoStack.length > 200) undoStack.shift();
@@ -69,7 +74,8 @@
     const state = from.pop();
     if (state === undefined) return;
     to.push(snapshot());
-    doc.notes = JSON.parse(state);
+    ({ notes: doc.notes, tracks: doc.tracks } = JSON.parse(state));
+    track = Math.min(track, doc.tracks.length - 1);
     selected = null;
     changed();
   }
@@ -132,7 +138,7 @@
   const end = () => doc.notes.reduce((e, n) => Math.max(e, n.start + n.length), 0);
 
   function addNote(key: number, start: number, len: number): SongNote {
-    const note: SongNote = { key, start, length: len, velocity: 90, hand };
+    const note: SongNote = { key, start, length: len, velocity: 90, track };
     doc.notes.push(note);
     return note;
   }
@@ -149,6 +155,49 @@
     engine.note(key, 80);
     setTimeout(() => engine.note(key, 0), 220);
   }
+
+  // ---- Tracks ---------------------------------------------------------------------------------
+
+  let tracksOpen = $state(false);
+
+  async function addTrack() {
+    remember();
+    doc.tracks.push({ name: `Track ${doc.tracks.length + 1}` });
+    track = doc.tracks.length - 1;
+    changed();
+    await tick();
+    (document.getElementById(`track-name-${track}`) as HTMLInputElement | null)?.select();
+  }
+
+  function renameTrack(i: number, name: string) {
+    doc.tracks[i].name = name;
+    changed();
+  }
+
+  /** Deletes the track and its notes (undoable). The last track can't go. */
+  function deleteTrack(i: number) {
+    if (doc.tracks.length < 2) return;
+    remember();
+    doc.tracks.splice(i, 1);
+    doc.notes = doc.notes.filter((n) => n.track !== i);
+    for (const n of doc.notes) if (n.track > i) n.track--;
+    if (selected && !doc.notes.includes(selected)) selected = null;
+    if (track >= i && track > 0) track--;
+    changed();
+  }
+
+  /** Puts the selected note on the current track. */
+  function moveSelected() {
+    if (!selected || selected.track === track) return;
+    remember();
+    selected.track = track;
+    changed();
+  }
+
+  const selectedTrack = $derived.by(() => {
+    void version;
+    return selected?.track ?? null;
+  });
 
   // ---- Step entry: play a key or chord on the keyboard, it lands at the cursor ----------------
 
@@ -205,7 +254,6 @@
 
   type RGB = [number, number, number];
   const PULSE: RGB = [127, 212, 255];
-  const AMBER: RGB = [255, 181, 71];
   const rgba = (c: RGB, a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
   /** Room below beat 0. */
   const PAD = 30;
@@ -299,7 +347,7 @@
       }
     }
 
-    // Notes.
+    // Notes: the current track's bright, the others dimmed.
     ctx.font = "600 10px 'Inter Variable', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -311,7 +359,7 @@
       if (y1 < 0 || y0 > h) continue;
       const x = r.black ? r.x : r.x + 2;
       const nw = r.black ? r.w : r.w - 4;
-      ctx.fillStyle = rgba(n.hand === "left" ? AMBER : PULSE, 0.92);
+      ctx.fillStyle = rgba(trackColor(n.track), n.track === track ? 0.92 : 0.35);
       ctx.beginPath();
       ctx.roundRect(x, y0 + 1, nw, Math.max(4, y1 - y0 - 2), Math.min(5, nw / 2));
       ctx.fill();
@@ -331,7 +379,7 @@
     if (hover && !drag) {
       const r = keys[hover.key];
       if (r) {
-        ctx.fillStyle = rgba(hand === "left" ? AMBER : PULSE, 0.22);
+        ctx.fillStyle = rgba(trackColor(track), 0.22);
         ctx.fillRect(r.x + (r.black ? 0 : 2), yOf(hover.beat + length), r.w - (r.black ? 0 : 4), length * ppb);
       }
     }
@@ -641,15 +689,61 @@
       </button>
       <Segmented label="Note length" value={stepLength} onchange={(v) => (stepLength = v)} options={lengths} />
       <button class="toggle" class:on={dotted} aria-pressed={dotted} aria-label="Dotted" title="Dotted (×1.5)" onclick={() => (dotted = !dotted)}>·</button>
-      <Segmented
-        label="Hand"
-        value={hand}
-        onchange={(v) => (hand = v)}
-        options={[
-          { value: "left", label: "L" },
-          { value: "right", label: "R" },
-        ]}
-      />
+      <div class="anchor">
+        <button
+          class="ghost track-button"
+          aria-label="Track for new notes: {trackList[track]?.name}"
+          aria-expanded={tracksOpen}
+          onclick={() => (tracksOpen = !tracksOpen)}
+        >
+          <span class="swatch" style:--color={trackCss(track)} aria-hidden="true"></span>
+          <span class="track-name">{trackList[track]?.name}</span>
+        </button>
+        <Sheet label="Tracks" open={tracksOpen} onclose={() => (tracksOpen = false)} width={300}>
+          <div class="tracks">
+            <span class="label">New notes go on the selected track</span>
+            {#each trackList as t, i (i)}
+              <div class="track-row" class:current={i === track}>
+                <button class="pick" aria-label="Add notes to {t.name}" aria-pressed={i === track} onclick={() => (track = i)}>
+                  <span class="swatch" style:--color={trackCss(i)} aria-hidden="true"></span>
+                </button>
+                <input
+                  id="track-name-{i}"
+                  value={t.name}
+                  aria-label="Track name"
+                  onfocus={() => {
+                    track = i;
+                    remember();
+                  }}
+                  oninput={(e) => renameTrack(i, e.currentTarget.value)}
+                  onblur={(e) => {
+                    if (!e.currentTarget.value.trim()) renameTrack(i, `Track ${i + 1}`);
+                  }}
+                  onkeydown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
+                  }}
+                />
+                <span class="count dim" title="Notes">{t.notes}</span>
+                <button
+                  class="ghost icon small-icon"
+                  aria-label="Delete {t.name}"
+                  title={t.notes ? `Delete the track and its ${t.notes} notes` : "Delete the track"}
+                  disabled={trackList.length < 2}
+                  onclick={() => deleteTrack(i)}
+                >
+                  <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                </button>
+              </div>
+            {/each}
+            <div class="track-actions">
+              <button class="ghost" onclick={addTrack}>+ Add track</button>
+              {#if selectedTrack !== null && selectedTrack !== track}
+                <button class="ghost" onclick={moveSelected}>Move selected note here</button>
+              {/if}
+            </div>
+          </div>
+        </Sheet>
+      </div>
       <button class="ghost" onclick={rest}>Rest</button>
       <button class="toggle" class:on={typing} aria-pressed={typing} onclick={() => (typing = !typing)}>Type</button>
       <div class="anchor">
@@ -749,6 +843,80 @@
     top: auto;
     bottom: calc(100% + 10px);
     transform-origin: bottom right;
+  }
+  .track-button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 160px;
+    color: var(--snow);
+  }
+  .track-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+    background: var(--color);
+    box-shadow: 0 0 8px var(--color);
+  }
+  .tracks {
+    display: grid;
+    gap: 6px;
+  }
+  .track-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px;
+    border-radius: 12px;
+    border: 1px solid transparent;
+  }
+  .track-row.current {
+    border-color: var(--line-strong);
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .track-row:not(.current) .swatch {
+    opacity: 0.45;
+    box-shadow: none;
+  }
+  .track-row input {
+    flex: 1;
+    border-color: transparent;
+    background: transparent;
+    padding: 6px 8px;
+  }
+  .track-row input:hover {
+    border-color: var(--line);
+  }
+  .pick {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+  }
+  .count {
+    font-family: var(--mono);
+    font-size: 11px;
+    min-width: 3ch;
+    text-align: right;
+  }
+  .small-icon {
+    width: 26px;
+    height: 26px;
+    border-color: transparent;
+  }
+  .track-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
   }
   .help-list {
     margin: 0;

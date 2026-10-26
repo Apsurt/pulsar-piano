@@ -1,6 +1,6 @@
 <script lang="ts">
   // Practicing a song. The stage draws the notes and the progress; this screen keeps just the song title,
-  // a play prompt and the score in view. Mode, hands, view and speed live in the Options sheet.
+  // a play prompt and the score in view. Mode, tracks, view and speed live in the Options sheet.
   import { onDestroy, onMount } from "svelte";
   import Segmented from "../lib/Segmented.svelte";
   import Sheet from "../lib/Sheet.svelte";
@@ -8,8 +8,8 @@
   import { nav, openEditor, practicePrefs, savePracticePrefs } from "../lib/app.svelte";
   import { onAction, onFader } from "../lib/controls";
   import { live, type SongView } from "../lib/live";
-  import { Practice, type Hands, type Mode } from "../lib/practice";
-  import type { Song } from "../lib/songs";
+  import { Practice, type Mode } from "../lib/practice";
+  import { trackCss, type Song } from "../lib/songs";
 
   let { song, songId }: { song: Song; songId: string } = $props();
 
@@ -17,6 +17,8 @@
   // svelte-ignore state_referenced_locally
   const practice = new Practice(song, practicePrefs.leadIn);
   practice.loop = practicePrefs.loop;
+  // svelte-ignore state_referenced_locally
+  practice.setPlayed(practicePrefs.tracks[songId] ?? []);
   live.practice = practice;
   onDestroy(() => {
     // The next screen may already have its own practice running.
@@ -32,7 +34,7 @@
   let total = $state(practice.total);
   let speed = $state(1);
   let mode = $state<Mode>("wait");
-  let hands = $state<Hands>("both");
+  let played = $state([...practice.played].sort((a, b) => a - b));
   let view = $state<SongView>(live.songView);
   let optionsOpen = $state(false);
   let loop = $state(practice.loop);
@@ -113,10 +115,20 @@
     practice.setMode(m);
   }
 
-  function setHands(h: Hands) {
-    hands = h;
-    practice.setHands(h);
+  /** Tracks with notes; empty ones aren't worth choosing. */
+  const playable = practice.tracks.flatMap((t, i) => (t.notes ? [i] : []));
+  const playingAny = (tracks: number[]) => tracks.some((t) => playable.includes(t));
+
+  /** Turns a track on or off; the last one with notes stays on. */
+  function toggleTrack(track: number) {
+    const next = played.includes(track) ? played.filter((t) => t !== track) : [...played, track];
+    if (!playingAny(next)) return;
+    practice.setPlayed(next);
+    played = [...practice.played].sort((a, b) => a - b);
     total = practice.total;
+    if (played.length === practice.tracks.length) delete practicePrefs.tracks[songId];
+    else practicePrefs.tracks[songId] = played;
+    savePracticePrefs();
   }
 
   function setView(v: SongView) {
@@ -170,19 +182,28 @@
                 ]}
               />
             </div>
-            {#if practice.hasHands}
+            {#if playable.length > 1}
               <div class="field">
-                <span class="label">Hands</span>
-                <Segmented
-                  label="Hands"
-                  value={hands}
-                  onchange={setHands}
-                  options={[
-                    { value: "left", label: "Left" },
-                    { value: "both", label: "Both" },
-                    { value: "right", label: "Right" },
-                  ]}
-                />
+                <span class="label">Tracks you play</span>
+                <div class="tracks" role="group" aria-label="Tracks you play">
+                  {#each playable as i (i)}
+                    {@const track = practice.tracks[i]}
+                    {@const on = played.includes(i)}
+                    {@const last = on && !playingAny(played.filter((t) => t !== i))}
+                    <button
+                      class="track"
+                      class:on
+                      aria-pressed={on}
+                      disabled={last}
+                      title={last ? "At least one track stays on" : undefined}
+                      onclick={() => toggleTrack(i)}
+                    >
+                      <span class="swatch" style:--color={trackCss(i)} aria-hidden="true"></span>
+                      <span class="name">{track.name}</span>
+                      <span class="count dim">{track.notes}</span>
+                    </button>
+                  {/each}
+                </div>
               </div>
             {/if}
             <div class="field">
@@ -341,6 +362,60 @@
   .label {
     font-size: 12px;
     color: var(--mist);
+  }
+  .tracks {
+    display: grid;
+    gap: 4px;
+    width: 100%;
+  }
+  .track {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--mist);
+    font-size: 13px;
+    text-align: left;
+    transition:
+      background 120ms,
+      color 120ms;
+  }
+  .track:hover {
+    color: var(--snow);
+  }
+  .track.on {
+    color: var(--snow);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--line-strong);
+  }
+  .track:disabled {
+    cursor: default;
+  }
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+    background: var(--color);
+    opacity: 0.3;
+  }
+  .track.on .swatch {
+    opacity: 1;
+    box-shadow: 0 0 8px var(--color);
+  }
+  .name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .count {
+    font-family: var(--mono);
+    font-size: 11px;
   }
   .stepper {
     display: flex;

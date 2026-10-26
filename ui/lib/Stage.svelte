@@ -4,6 +4,7 @@
   import { live, type Beam, type Flare } from "./live";
   import { HIGHEST, LOWEST, hitTest, layout, noteName, type KeyRect } from "./keyboard";
   import type { Practice, PracticeNote } from "./practice";
+  import { trackColor } from "./songs";
 
   let {
     onpress,
@@ -21,7 +22,6 @@
   const WHITE: RGB = [233, 233, 239];
   const WHITE_LIT: RGB = [172, 227, 255];
   const BLACK: RGB = [14, 14, 19];
-  const AMBER: RGB = [255, 181, 71];
   const CORAL: RGB = [255, 122, 89];
   const VOID: RGB = [10, 10, 15];
   const GREY: RGB = [70, 70, 82];
@@ -114,11 +114,9 @@
     ctx.shadowBlur = 0;
   }
 
-  const handColor = (n: PracticeNote): RGB => (n.hand === "left" ? AMBER : PULSE);
-
-  /** Sets fill and alpha for a song note: bright when hit, grey when missed, ghosted when not your hand. */
+  /** Sets fill and alpha for a song note: bright when hit, grey when missed, ghosted when not your track. */
   function styleNote(p: Practice, n: PracticeNote) {
-    const color = handColor(n);
+    const color = trackColor(n.track);
     ctx.globalAlpha = !p.isActive(n) ? 0.16 : n.state === "missed" ? 0.45 : 1;
     ctx.fillStyle =
       n.state === "hit" ? mix(color, SNOW, 0.6) : n.state === "missed" ? mix(color, GREY, 0.7) : rgba(color, 0.92);
@@ -217,7 +215,7 @@
       if (!r || live.velocity[n.key] > 0) continue;
       const x = r.black ? r.x : r.x + 1;
       const kw = r.black ? r.w : r.w - 2;
-      ctx.fillStyle = rgba(handColor(n), strength);
+      ctx.fillStyle = rgba(trackColor(n.track), strength);
       ctx.beginPath();
       ctx.roundRect(x, kbY, kw, r.h, [0, 0, 5, 5]);
       ctx.fill();

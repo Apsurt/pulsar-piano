@@ -35,8 +35,15 @@ export const computerKeys = $state({ octave: 4, usedAt: 0 });
 
 const PRACTICE_PREFS = "pulsar.practice";
 
-function loadPracticePrefs(): { loop: boolean; leadIn: number } {
-  const defaults = { loop: false, leadIn: 2 };
+type PracticePrefs = {
+  loop: boolean;
+  leadIn: number;
+  /** The tracks you play, per song id; songs not listed play every track. */
+  tracks: Record<string, number[]>;
+};
+
+function loadPracticePrefs(): PracticePrefs {
+  const defaults: PracticePrefs = { loop: false, leadIn: 2, tracks: {} };
   try {
     return { ...defaults, ...JSON.parse(localStorage.getItem(PRACTICE_PREFS) ?? "{}") };
   } catch {
