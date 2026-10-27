@@ -5,10 +5,11 @@ import type { PlayedNote, PracticeNote, Recording } from "./practice";
 /** A note the song asks for. Times are song seconds. */
 export type Expected = { key: number; start: number; end: number; track: number };
 
-/** The song's notes on the tracks a recording was played on. */
+/** The song's notes a recording was played against: its tracks, and its section if it had one. */
 export function expectedFor(notes: PracticeNote[], recording: Recording): Expected[] {
+  const { from = -Infinity, to = Infinity } = recording.section ?? {};
   return notes
-    .filter((n) => recording.tracks.includes(n.track))
+    .filter((n) => recording.tracks.includes(n.track) && n.start >= from - 0.001 && n.start < to)
     .map(({ key, start, end, track }) => ({ key, start, end, track }));
 }
 export type Timing = "good" | "early" | "late" | "missed";
@@ -44,9 +45,11 @@ const KEEP_LIMIT = 30;
 
 export const noTakes = (): Takes => ({ latest: null, best: null, kept: [] });
 
-/** A finished pass becomes the latest, and the best if it scores at least as well. True if it's a new best. */
+/** A finished pass becomes the latest, and the best if it's the whole song and scores at least as well.
+ *  True if it's a new best. */
 export function addPass(takes: Takes, take: Take): boolean {
   takes.latest = take;
+  if (take.recording.section) return false;
   if (takes.best && takes.best.score.overall > take.score.overall) return false;
   takes.best = take;
   return true;

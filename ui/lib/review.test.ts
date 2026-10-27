@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Practice, type PlayedNote, type Recording } from "./practice";
-import { addPass, keepTake, noTakes, review, type Expected, type Take } from "./review";
+import { addPass, expectedFor, keepTake, noTakes, review, type Expected, type Take } from "./review";
 import type { Song } from "./songs";
 
 const expect4: Expected[] = [
@@ -141,5 +141,58 @@ describe("takes", () => {
     expect(keepTake(takes, takes.latest!)).toBe(true);
     expect(keepTake(takes, takes.latest!)).toBe(false);
     expect(takes.kept.map((t) => t.at)).toEqual([3]);
+  });
+});
+
+describe("practicing a section", () => {
+  const song: Song = {
+    version: 2,
+    title: "t",
+    artist: "",
+    tempos: [{ beat: 0, bpm: 60 }],
+    time_signatures: [{ beat: 0, numerator: 4, denominator: 4 }],
+    tracks: [{ name: "Piano" }],
+    notes: [60, 62, 64, 65].map((key, i) => ({ key, start: i, length: 1, velocity: 90, track: 0 })),
+  };
+  const run = (p: Practice, seconds: number) => {
+    for (let t = 0; t < seconds; t += 0.01) p.update(0.01);
+  };
+
+  it("plays only from the start point to the end point, with a lead-in", () => {
+    const p = new Practice(song, 1);
+    p.setSection(1, 3);
+    expect(p.time).toBe(0);
+    expect(p.total).toBe(2);
+    expect(p.notes.map((n) => p.isActive(n))).toEqual([false, true, true, false]);
+
+    const passes: Recording[] = [];
+    p.onPass = (r) => passes.push(r);
+    p.setMode("tempo");
+    p.playing = true;
+    run(p, 1);
+    p.press(62);
+    run(p, 1);
+    p.press(64);
+    run(p, 1.6);
+    expect(p.finished).toBe(true);
+    expect(passes[0].section).toEqual({ from: 1, to: 3 });
+
+    // Scored against the section only, and never the best (that's for the whole song).
+    const notes = expectedFor(p.notes, passes[0]);
+    expect(notes.map((n) => n.key)).toEqual([62, 64]);
+    const scored = review(notes, passes[0]).score;
+    expect(scored.notes).toEqual({ hit: 2, total: 2 });
+    const takes = noTakes();
+    expect(addPass(takes, { at: 1, recording: passes[0], score: scored })).toBe(false);
+    expect([takes.latest?.at, takes.best]).toEqual([1, null]);
+  });
+
+  it("waits only for chords inside the section", () => {
+    const p = new Practice(song, 0);
+    p.setSection(0, 1);
+    p.playing = true;
+    p.press(60);
+    run(p, 2);
+    expect(p.finished).toBe(true);
   });
 });

@@ -237,7 +237,10 @@
               <button class="open" onclick={() => openSong(song.id)}>
                 <span class="title">{song.title}</span>
                 <span class="dim">{song.artist || "Unknown artist"}</span>
-                <span class="mono dim length">{formatTime(song.seconds)}</span>
+                <span class="side">
+                  {#if song.best !== null}<span class="best mono" title="Your best pass">{song.best}%</span>{/if}
+                  <span class="mono dim length">{formatTime(song.seconds)}</span>
+                </span>
               </button>
               <div class="anchor">
                 <button
@@ -386,11 +389,24 @@
     font-size: 13px;
     font-weight: 400;
   }
-  .length {
+  .side {
     grid-column: 2;
     grid-row: 1 / span 2;
     align-self: center;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .length {
     font-size: 12px;
+  }
+  .best {
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--tint);
+    background: rgba(127, 212, 255, 0.1);
+    border: 1px solid rgba(127, 212, 255, 0.3);
   }
   .anchor {
     position: relative;

@@ -34,6 +34,8 @@ pub enum MidiEvent {
 }
 
 pub const CC_SUSTAIN: u8 = 64;
+/// The mod wheel (on the MiniLab, its right touch strip).
+pub const CC_MODULATION: u8 = 1;
 
 impl MidiEvent {
     /// Parses one complete channel message. System messages (clock, sysex, active sensing) are ignored.

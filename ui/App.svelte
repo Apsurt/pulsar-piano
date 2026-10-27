@@ -10,7 +10,7 @@
   import { live, press, release, heldCount } from "./lib/live";
   import { COMPUTER_KEYS } from "./lib/keyboard";
   import { songs } from "./lib/songs";
-  import { actionFor, faderFor, fire, moveFader } from "./lib/controls";
+  import { MOD_WHEEL, actionFor, faderFor, fire, moveFader, moveStrip } from "./lib/controls";
   import {
     computerKeys,
     library,
@@ -111,7 +111,9 @@
         }
         const fader = faderFor(controller);
         if (fader) moveFader(fader, value / 127);
+        else if (controller === MOD_WHEEL) moveStrip("right", value / 127);
       }),
+      engine.onBend((amount) => moveStrip("left", amount)),
       engine.onPedal((isDown) => (live.sustain = played.sustain = isDown)),
       engine.onDevices((devices) => (status.devices = devices)),
       engine.onInstrument((s) => {

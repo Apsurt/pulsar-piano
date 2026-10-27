@@ -60,3 +60,24 @@ export function onFader(fn: (fader: number, value: number) => void): () => void 
 export function moveFader(fader: number, value: number) {
   faderHandler?.(fader, value);
 }
+
+// ---- Touch strips: the left one is pitch bend (springs back to the middle), the right one CC 1 ----------
+
+export type Strip = "left" | "right";
+/** The right strip (mod wheel) in the MiniLab's Arturia preset. */
+export const MOD_WHEEL = 1;
+
+let stripHandler: ((strip: Strip, value: number) => void) | null = null;
+
+/** `value`: left strip -1 (down) to 1 (up), 0 at rest; right strip 0 (bottom) to 1 (top).
+ *  One view at a time; returns an unsubscribe for onMount. */
+export function onStrip(fn: (strip: Strip, value: number) => void): () => void {
+  stripHandler = fn;
+  return () => {
+    if (stripHandler === fn) stripHandler = null;
+  };
+}
+
+export function moveStrip(strip: Strip, value: number) {
+  stripHandler?.(strip, value);
+}

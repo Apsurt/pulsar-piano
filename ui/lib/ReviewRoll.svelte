@@ -1,12 +1,26 @@
 <script lang="ts">
   // The review's piano roll: the song's notes as outlines, what you played filled in over them, coloured by
-  // how it went. Time runs left to right; the wheel scrolls, Ctrl+wheel zooms, hovering a note explains it.
-  import { onMount } from "svelte";
+  // how it went. Time runs left to right; the wheel scrolls, Ctrl+wheel zooms, hovering a note explains it,
+  // clicking moves the playhead.
+  import { onMount, untrack } from "svelte";
   import { isBlack, noteName } from "./keyboard";
   import type { Mode, PlayedNote } from "./practice";
   import type { NoteReview, Review } from "./review";
 
-  let { review, bars, mode }: { review: Review; bars: number[]; mode: Mode } = $props();
+  let {
+    review,
+    bars,
+    mode,
+    playhead = null,
+    onseek,
+  }: {
+    review: Review;
+    bars: number[];
+    mode: Mode;
+    /** Where playback is, in song seconds; the roll keeps it in view. */
+    playhead?: number | null;
+    onseek?: (time: number) => void;
+  } = $props();
 
   type RGB = [number, number, number];
   const GOOD: RGB = [110, 231, 183];
@@ -131,8 +145,30 @@
       ctx.fillStyle = rgba(BAD, 0.9);
       ctx.fill();
     }
+    if (playhead !== null) {
+      const x = Math.round(xOf(playhead));
+      ctx.shadowColor = "rgba(127,212,255,0.9)";
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = "rgba(197,236,255,0.95)";
+      ctx.fillRect(x - 1, 0, 2, h);
+      ctx.shadowBlur = 0;
+    }
     ctx.restore();
   }
+
+  // When the playhead moves out of view, the roll follows it (a quarter of the way in). Only the playhead
+  // moving triggers this, so scrolling away while paused stays put.
+  $effect(() => {
+    const at = playhead;
+    untrack(() => {
+      if (at === null || !w) return;
+      const x = xOf(at);
+      if (x < GUTTER || x > w - 24) {
+        scroll = at - visible / 4;
+        clampScroll();
+      }
+    });
+  });
 
   $effect(() => {
     void review;
@@ -140,9 +176,14 @@
     fit();
   });
   $effect(() => {
-    void [scroll, pps, rowH, review, bars];
+    void [scroll, pps, rowH, review, bars, playhead];
     draw();
   });
+
+  function down(e: PointerEvent) {
+    const x = e.clientX - canvas.getBoundingClientRect().left;
+    if (x > GUTTER) onseek?.(Math.min(span.end, Math.max(span.start, scroll + (x - GUTTER) / pps)));
+  }
 
   const ms = (seconds: number) => `${Math.round(Math.abs(seconds) * 1000)} ms`;
 
@@ -196,6 +237,7 @@
 <div class="roll">
   <canvas
     bind:this={canvas}
+    onpointerdown={down}
     onpointermove={pointer}
     onpointerleave={() => (hover = null)}
     onwheel={wheel}
@@ -220,6 +262,7 @@
     inset: 0;
     width: 100%;
     height: 100%;
+    cursor: pointer;
   }
   .tip {
     position: absolute;

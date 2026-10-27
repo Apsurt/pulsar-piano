@@ -17,6 +17,8 @@ pub struct SongSummary {
     pub notes: usize,
     pub seconds: f64,
     pub tracks: usize,
+    /// Your best full pass, 0–100, if you've played one.
+    pub best: Option<u32>,
     /// Last change, in Unix milliseconds.
     pub modified: u64,
 }
@@ -44,7 +46,10 @@ impl Library {
                     return None;
                 }
                 match self.load(&id) {
-                    Ok(song) => Some(summarize(id, &song, &path)),
+                    Ok(song) => {
+                        let best = self.best_score(&id);
+                        Some(summarize(id, &song, &path, best))
+                    }
                     Err(e) => {
                         eprintln!("skipping {}: {e}", path.display());
                         None
@@ -68,7 +73,14 @@ impl Library {
         let text = serde_json::to_string_pretty(song).map_err(|e| e.to_string())?;
         fs::write(&tmp, text).map_err(|e| e.to_string())?;
         fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-        Ok(summarize(id.to_owned(), song, &path))
+        Ok(summarize(id.to_owned(), song, &path, self.best_score(id)))
+    }
+
+    /// The overall score of your best take, if there is one.
+    fn best_score(&self, id: &str) -> Option<u32> {
+        let takes = self.load_takes(id).ok()??;
+        let score = takes.pointer("/best/score/overall")?.as_f64()?;
+        Some(score.round().clamp(0.0, 100.0) as u32)
     }
 
     /// Adds a song from a file on disk. Only MIDI for now.
@@ -203,7 +215,7 @@ fn pretty_title(stem: &str) -> String {
     }
 }
 
-fn summarize(id: String, song: &Song, path: &Path) -> SongSummary {
+fn summarize(id: String, song: &Song, path: &Path, best: Option<u32>) -> SongSummary {
     let modified = fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()
@@ -216,6 +228,7 @@ fn summarize(id: String, song: &Song, path: &Path) -> SongSummary {
         notes: song.notes.len(),
         seconds: song.seconds_at(song.end_beat()),
         tracks: song.tracks.len(),
+        best,
         modified,
     }
 }
@@ -257,11 +270,14 @@ mod tests {
         );
 
         // Takes live beside the songs, aren't songs themselves, and go to the trash with their song.
-        let takes = serde_json::json!({ "latest": { "score": { "overall": 80 } } });
+        let takes = serde_json::json!({ "best": { "score": { "overall": 83.6 } } });
         assert_eq!(library.load_takes(&second.id).unwrap(), None);
         library.save_takes(&second.id, &takes).unwrap();
         assert_eq!(library.load_takes(&second.id).unwrap(), Some(takes));
-        assert_eq!(library.list().len(), 2);
+        let list = library.list();
+        assert_eq!(list.len(), 2);
+        let best = |id: &str| list.iter().find(|s| s.id == id).unwrap().best;
+        assert_eq!((best(&second.id), best(&imported.id)), (Some(84), None));
 
         library.delete(&second.id).unwrap();
         assert_eq!(library.list().len(), 1);

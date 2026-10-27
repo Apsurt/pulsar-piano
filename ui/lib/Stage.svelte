@@ -133,6 +133,18 @@
     ctx.fillText(name, cx, cy + 0.5);
   }
 
+  /** A labelled line across the falling notes, `ahead` song seconds above the keyboard. */
+  function sectionLine(ahead: number, color: string, text: string) {
+    const y = Math.round(kbY - ahead * FALL);
+    if (y < 0 || y > kbY) return;
+    ctx.fillStyle = color;
+    ctx.fillRect(0, y - 1, w, 2);
+    ctx.font = "600 11px 'Inter Variable', sans-serif";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(text, w - 12, y - 4);
+  }
+
   function drawFalling(p: Practice) {
     const ahead = kbY / FALL;
     ctx.fillStyle = "rgba(255,255,255,0.05)";
@@ -140,6 +152,9 @@
       const y = kbY - (bar - p.time) * FALL;
       if (y >= 0 && y <= kbY) ctx.fillRect(0, Math.round(y), w, 1);
     }
+    // Practicing part of the song: where it starts (the left strip moves this) and where it stops.
+    if (p.from > p.firstNote + 0.001) sectionLine(p.from - p.time, rgba(TINT, 0.75), "Start");
+    if (p.to < p.duration - 0.001) sectionLine(p.to - p.time, "rgba(255,181,71,0.55)", "End");
     ctx.font = "600 10px 'Inter Variable', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";

@@ -38,6 +38,8 @@ export const engine = {
   setTouch: (touch: Touch) => invoke("set_touch", { touch }),
   /** Only these keyboard keys make sound (null: all). Presses of other keys are still reported. */
   setKeyFilter: (keys: number[] | null) => invoke("set_key_filter", { keys }),
+  /** On: the keyboard's pitch bend and mod wheel (touch strips) only come here, they don't change the sound. */
+  setStripsAsControls: (on: boolean) => invoke("set_strips_as_controls", { on }),
   openSoundsFolder: () => invoke("open_sounds_folder"),
   checkUpdate: () => invoke<string | null>("check_update"),
   installUpdate: () => invoke("install_update"),
@@ -49,4 +51,6 @@ export const engine = {
   /** CCs to act on: transport pads ("control" port) and faders/knobs ("keyboard" port). */
   onControl: (cb: (control: { controller: number; value: number; port: "control" | "keyboard" }) => void) =>
     on("control", cb),
+  /** The keyboard's pitch bend: -1 (down) to 1 (up), 0 at rest. */
+  onBend: (cb: (amount: number) => void) => on("bend", cb),
 };

@@ -129,6 +129,13 @@ fn set_touch(pulsar: State<Pulsar>, touch: Touch) -> Result<(), String> {
     Ok(())
 }
 
+/// While practicing, the touch strips move through the song instead of bending the sound.
+#[tauri::command]
+fn set_strips_as_controls(pulsar: State<Pulsar>, on: bool) -> Result<(), String> {
+    pulsar.engine()?.set_strips_as_controls(on);
+    Ok(())
+}
+
 /// While practicing with wrong keys silent: only these keyboard keys sound (`None`: all of them).
 #[tauri::command]
 fn set_key_filter(pulsar: State<Pulsar>, keys: Option<Vec<u8>>) -> Result<(), String> {
@@ -236,6 +243,10 @@ fn forward_events(app: AppHandle, events: Receiver<EngineEvent>) {
                     },
                     _,
                 ) => app.emit("pedal", value >= 64),
+                // The left touch strip: -1 (down) to 1 (up), springing back to 0.
+                EngineEvent::Midi(MidiEvent::PitchBend { value, .. }, Source::Device) => {
+                    app.emit("bend", (f32::from(value) - 8192.0) / 8192.0)
+                }
                 EngineEvent::Midi(..) => Ok(()),
                 EngineEvent::Devices(devices) => app.emit("devices", devices),
                 EngineEvent::InstrumentLoading(instrument) => app.emit(
@@ -333,6 +344,7 @@ pub fn run() {
             set_volume,
             set_touch,
             set_key_filter,
+            set_strips_as_controls,
             open_sounds_folder,
             check_update,
             install_update,

@@ -13,17 +13,18 @@ mod midi_in;
 mod touch;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 use rtrb::{Producer, RingBuffer};
 use serde::Serialize;
 
 use audio::{AudioCommand, AudioHandle, AudioStats, Renderer};
-pub use event::{CC_SUSTAIN, MidiEvent};
+pub use event::{CC_MODULATION, CC_SUSTAIN, MidiEvent};
 pub use instrument::Instrument;
 pub use key_filter::KeyFilter;
 pub use library::InstrumentInfo;
+use midi_in::InputSettings;
 pub use midi_in::MidiDevice;
 pub use touch::Touch;
 
@@ -75,10 +76,8 @@ pub struct Engine {
     devices: Arc<Mutex<Vec<MidiDevice>>>,
     current: Mutex<Option<InstrumentInfo>>,
     volume_db: AtomicU32,
-    /// A `Touch`, shared with the MIDI callbacks.
-    touch: Arc<AtomicU8>,
-    /// Which keyboard notes may sound, shared with the MIDI callbacks.
-    filter: Arc<KeyFilter>,
+    /// Touch, the key filter and the strips, shared with the MIDI callbacks.
+    settings: Arc<InputSettings>,
     loading: Mutex<()>,
     _housekeeping: mpsc::Sender<()>,
 }
@@ -97,15 +96,13 @@ impl Engine {
         let input = Arc::new(Mutex::new(input));
         let devices = Arc::new(Mutex::new(Vec::new()));
         let (housekeeping, housekeeping_stop) = mpsc::channel();
-        let touch = Arc::new(AtomicU8::new(Touch::default().to_u8()));
-        let filter = Arc::new(KeyFilter::default());
+        let settings = Arc::new(InputSettings::default());
         midi_in::spawn_housekeeping(
             input.clone(),
             events.clone(),
             garbage_rx,
             devices.clone(),
-            touch.clone(),
-            filter.clone(),
+            settings.clone(),
             housekeeping_stop,
         );
 
@@ -119,8 +116,7 @@ impl Engine {
             devices,
             current: Mutex::new(None),
             volume_db: AtomicU32::new(0f32.to_bits()),
-            touch,
-            filter,
+            settings,
             loading: Mutex::new(()),
             _housekeeping: housekeeping,
         };
@@ -176,13 +172,30 @@ impl Engine {
 
     /// How keyboard velocity maps to loudness, from the next note on.
     pub fn set_touch(&self, touch: Touch) {
-        self.touch.store(touch.to_u8(), Ordering::Relaxed);
+        self.settings.touch.store(touch.to_u8(), Ordering::Relaxed);
     }
 
     /// Lets only these keyboard keys sound (`None`: all of them). Other presses are still reported.
     /// Releases always pass, and notes the app sends itself are never filtered.
     pub fn set_key_filter(&self, keys: Option<&[u8]>) {
-        self.filter.set(keys);
+        self.settings.filter.set(keys);
+    }
+
+    /// While on, the keyboard's pitch bend and modulation (the MiniLab's touch strips) are only reported,
+    /// not played, so the app can use them as controls. Turning it on puts both back at rest.
+    pub fn set_strips_as_controls(&self, on: bool) {
+        self.settings.strips.store(on, Ordering::Relaxed);
+        if on && let Ok(mut queue) = self.input.lock() {
+            let _ = queue.push(MidiEvent::PitchBend {
+                channel: 0,
+                value: 8192,
+            });
+            let _ = queue.push(MidiEvent::ControlChange {
+                channel: 0,
+                controller: CC_MODULATION,
+                value: 0,
+            });
+        }
     }
 
     /// 0 dB is unity; -60 dB or lower is silence.
@@ -208,7 +221,7 @@ impl Engine {
             devices: self.devices.lock().map(|d| d.clone()).unwrap_or_default(),
             instrument: self.current.lock().ok().and_then(|c| c.clone()),
             sounds_dir: self.sounds_dir.clone(),
-            touch: Touch::from_u8(self.touch.load(Ordering::Relaxed)),
+            touch: Touch::from_u8(self.settings.touch.load(Ordering::Relaxed)),
         }
     }
 }

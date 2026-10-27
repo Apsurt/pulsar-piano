@@ -1,9 +1,15 @@
 <script lang="ts">
-  // After a pass: how it went, note by note. Your take over the song's notes, the score and its four parts,
-  // and your best and kept takes to compare. Escape or Close goes back to practice.
+  // How a pass went, note by note: your take over the song's notes, the score and its four parts, your best
+  // and kept takes to compare, and playback of your take or the song from anywhere on the roll.
+  // Escape or Close goes back to practice.
+  import { onDestroy, onMount, untrack } from "svelte";
+  import Segmented from "./Segmented.svelte";
   import ReviewRoll from "./ReviewRoll.svelte";
+  import { engine } from "./engine";
+  import { NotePlayer, type Playable } from "./player";
   import type { Practice } from "./practice";
   import { expectedFor, review, type Take, type Takes } from "./review";
+  import { formatTime } from "./songs";
 
   let {
     practice,
@@ -12,6 +18,7 @@
     onclose,
     onagain,
     onkeep,
+    onforget,
   }: {
     practice: Practice;
     takes: Takes;
@@ -20,18 +27,23 @@
     onclose: () => void;
     onagain: () => void;
     onkeep: (take: Take) => void;
+    /** Removes a kept take. */
+    onforget: (take: Take) => void;
   } = $props();
 
+  const barAt = (t: number) => Math.max(1, practice.bars.filter((b) => b <= t + 1e-3).length);
   const date = (at: number) =>
     new Date(at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
-  /** The takes you can look at: this pass, your best, and the ones you kept (newest first). */
+  /** The takes you can look at: this pass (or your latest), your best, and the ones you kept (newest first). */
   const choices = $derived.by(() => {
     const list: { id: string; label: string; take: Take }[] = [];
-    if (current) list.push({ id: "pass", label: "This pass", take: current });
-    if (takes.best && takes.best.at !== current?.at) list.push({ id: "best", label: "Best", take: takes.best });
+    const first = current ?? takes.latest;
+    if (first) list.push({ id: "pass", label: current ? "This pass" : "Latest", take: first });
+    if (takes.best && takes.best.at !== first?.at) list.push({ id: "best", label: "Best", take: takes.best });
     for (const take of takes.kept.toReversed())
-      if (take.at !== current?.at) list.push({ id: `kept-${take.at}`, label: date(take.at), take });
+      if (take.at !== first?.at && take.at !== takes.best?.at)
+        list.push({ id: `kept-${take.at}`, label: date(take.at), take });
     return list;
   });
   let chosen = $state("pass");
@@ -60,6 +72,85 @@
     return [short && `${short} let go too soon`, long && `${long} held too long`].filter(Boolean).join(", ");
   });
 
+  // ---- Playback: your take, the song, or both, at the speed the take was played -------------------------
+
+  type Source = "take" | "song" | "both";
+  let source = $state<Source>("take");
+  let playing = $state(false);
+  let playhead = $state<number | null>(null);
+  const player = new NotePlayer((key, velocity) => engine.note(key, velocity).catch(() => {}));
+
+  const songNotes = $derived(
+    take ? practice.notes.filter((n) => take.recording.tracks.includes(n.track)).map(({ key, velocity, start, end }) => ({ key, velocity, start, end })) : [],
+  );
+  const notesFor = (s: Source): Playable[] =>
+    s === "take" ? (take?.recording.played ?? []) : s === "song" ? songNotes : [...(take?.recording.played ?? []), ...songNotes];
+  /** From just before the first note to just after the last, in song seconds. */
+  const range = $derived.by(() => {
+    const all = notesFor("both");
+    return {
+      start: Math.min(0, ...all.map((n) => n.start)) - 0.3,
+      end: Math.max(0, ...all.map((n) => n.end)) + 0.3,
+    };
+  });
+
+  // A different take starts again from the top, at its own speed. Only the take matters here: switching
+  // what you hear carries on from the same place (setSource).
+  $effect(() => {
+    const chosenTake = take;
+    untrack(() => {
+      if (!chosenTake) return;
+      player.pause();
+      player.speed = chosenTake.recording.speed;
+      player.setNotes(notesFor(source));
+      player.seek(range.start);
+      playing = false;
+      playhead = range.start;
+    });
+  });
+
+  function setSource(s: Source) {
+    source = s;
+    player.setNotes(notesFor(s));
+  }
+
+  function seek(time: number) {
+    player.seek(time);
+    playhead = time;
+  }
+
+  /** Play or pause (the ▶ pad and Space do this while the review is open). */
+  export function togglePlayback() {
+    if (playing) {
+      player.pause();
+      playing = false;
+      return;
+    }
+    if (player.time >= range.end - 0.01) seek(range.start);
+    player.play();
+    playing = true;
+  }
+
+  onMount(() => {
+    let last = performance.now();
+    let raf = requestAnimationFrame(function frame(now) {
+      player.update(Math.min(0.1, (now - last) / 1000));
+      last = now;
+      if (player.playing) {
+        playhead = player.time;
+        if (player.time >= range.end) {
+          player.pause();
+          playing = false;
+        }
+      }
+      raf = requestAnimationFrame(frame);
+    });
+    return () => cancelAnimationFrame(raf);
+  });
+  onDestroy(() => player.pause());
+
+  const clock = (t: number) => formatTime(Math.max(0, (t - range.start) / (take?.recording.speed ?? 1)));
+
   // Capture phase, so Escape closes the review instead of leaving the song.
   function keydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
@@ -83,6 +174,9 @@
           </span>
           <span class="dim">
             {mode === "wait" ? "Wait for me" : "Keep tempo"} · {Math.round(take.recording.speed * 100)}% speed
+            {#if take.recording.section}
+              · bars {barAt(take.recording.section.from)}–{barAt(take.recording.section.to - 0.001)}
+            {/if}
             {#if takes.best && !isBest} · best {takes.best.score.overall}%{/if}
           </span>
         </div>
@@ -123,7 +217,39 @@
       </div>
     </div>
 
-    <ReviewRoll review={result} bars={practice.bars} {mode} />
+    <ReviewRoll review={result} bars={practice.bars} {mode} {playhead} onseek={seek} />
+
+    <div class="transport">
+      <button class="round" onclick={togglePlayback} aria-label={playing ? "Pause playback" : "Play back"} title="Space or ▶ pad">
+        {#if playing}
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5v14M16 5v14" /></svg>
+        {:else}
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path class="fill" d="M8 5l11 7-11 7z" /></svg>
+        {/if}
+      </button>
+      <span class="mono dim time">{clock(playhead ?? range.start)}</span>
+      <input
+        class="scrub"
+        type="range"
+        min={range.start}
+        max={range.end}
+        step="0.01"
+        value={playhead ?? range.start}
+        oninput={(e) => seek(Number(e.currentTarget.value))}
+        aria-label="Playback position"
+      />
+      <span class="mono dim time">{clock(range.end)}</span>
+      <Segmented
+        label="What to hear"
+        value={source}
+        onchange={setSource}
+        options={[
+          { value: "take", label: "Your take" },
+          { value: "song", label: "The song" },
+          { value: "both", label: "Both" },
+        ]}
+      />
+    </div>
 
     <footer>
       <div class="legend dim">
@@ -135,9 +261,13 @@
       </div>
       <div class="actions">
         <button class="ghost" onclick={onclose}>Close</button>
-        <button class="ghost keep" disabled={isKept} onclick={() => onkeep(take)} title="Or tap the record pad">
-          <span class="dot" aria-hidden="true"></span>{isKept ? "Kept" : "Keep this take"}
-        </button>
+        {#if isKept}
+          <button class="ghost" onclick={() => onforget(take)}>Remove from kept</button>
+        {:else}
+          <button class="ghost keep" onclick={() => onkeep(take)} title="Or tap the record pad">
+            <span class="dot" aria-hidden="true"></span>Keep this take
+          </button>
+        {/if}
         <button class="primary" onclick={onagain}>Play again</button>
       </div>
     </footer>
@@ -147,7 +277,7 @@
 <style>
   .review {
     display: grid;
-    grid-template-rows: auto auto minmax(120px, 1fr) auto;
+    grid-template-rows: auto auto minmax(120px, 1fr) auto auto;
     gap: 14px;
     padding: 18px;
     border-radius: 22px;
@@ -291,6 +421,41 @@
   .actions {
     display: flex;
     gap: 8px;
+  }
+  .transport {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .round {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    background: rgba(255, 255, 255, 0.06);
+  }
+  svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  svg .fill {
+    fill: currentColor;
+    stroke: none;
+  }
+  .time {
+    font-size: 12px;
+    min-width: 4ch;
+  }
+  .scrub {
+    flex: 1;
+    min-width: 80px;
+    accent-color: var(--pulse);
   }
   button {
     font: inherit;

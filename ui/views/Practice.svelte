@@ -9,7 +9,7 @@
   import Sheet from "../lib/Sheet.svelte";
   import TopBar from "../lib/TopBar.svelte";
   import { nav, openEditor, practicePrefs, savePracticePrefs } from "../lib/app.svelte";
-  import { onAction, onFader } from "../lib/controls";
+  import { onAction, onFader, onStrip } from "../lib/controls";
   import { engine } from "../lib/engine";
   import { live, type SongView } from "../lib/live";
   import { Practice, type Mode } from "../lib/practice";
@@ -54,7 +54,12 @@
   const selection = $derived(mode === "listen" ? heard : played);
 
   // Where to set your keyboard's octave buttons for the tracks you play, and any changes on the way.
-  const octaves = $derived(planOctaves(practice.notes.filter((n) => played.includes(n.track)), practice.bars));
+  const octaves = $derived(
+    planOctaves(
+      practice.notes.filter((n) => played.includes(n.track) && n.start >= sectionFrom - 0.001 && n.start < sectionTo),
+      practice.bars,
+    ),
+  );
   const keysFor = (shift: number) => `${noteName(KEYBOARD.low + 12 * shift)}–${noteName(KEYBOARD.high + 12 * shift)}`;
   /** While playing: an octave change coming up in the next few seconds (or just now). */
   const nextChange = $derived(
@@ -99,11 +104,70 @@
     if (!practice.loop) reviewing = true;
   };
 
+  // ---- Part of the song: the left touch strip moves the start, the right one sets the end -----------------
+
+  let sectionFrom = $state(practice.from);
+  let sectionTo = $state(practice.to);
+  let hasSection = $state(false);
+  /** Left strip: -1 to 1, springing back to 0. Held away from the middle, it moves the start. */
+  let jog = 0;
+  let jogging = false;
+  let lastJogAt = 0;
+
+  /** Bar number (from 1) at song time `t`. */
+  const barAt = (t: number) => Math.max(1, practice.bars.filter((b) => b <= t + 1e-3).length);
+  /** Where notes start on the tracks on screen (yours, or the ones you hear): the points start and end snap to. */
+  const noteStarts = () =>
+    practice.chords.filter((c) => c.notes.some((n) => practice.shown.has(n.track))).map((c) => c.start);
+  const nearestNote = (t: number, after = -Infinity) =>
+    noteStarts()
+      .filter((s) => s > after)
+      .reduce<number | null>((best, s) => (best === null || Math.abs(s - t) < Math.abs(best - t) ? s : best), null);
+
+  /** Called every frame: while the left strip is held, the start point travels (faster the further it's
+   *  pushed); let go and it settles on the nearest note. */
+  function updateJog(dt: number, now: number) {
+    if (Math.abs(jog) > 0.04 && !reviewing) {
+      if (practice.playing) practice.playing = false;
+      const from = practice.from + Math.sign(jog) * jog * jog * 10 * dt;
+      // Moving the start past the end lets the end go to the end of the song.
+      const to = from >= practice.to - 0.05 ? practice.duration : practice.to;
+      practice.setSection(from, to);
+      show(`Start: bar ${barAt(practice.from)}`);
+      jogging = true;
+      lastJogAt = now;
+    } else if (jogging && now - lastJogAt > 300) {
+      jogging = false;
+      practice.setSection(nearestNote(practice.from) ?? practice.firstNote, practice.to);
+      show(`Start: bar ${barAt(practice.from)}`);
+    }
+  }
+
+  /** Right strip, 0 (bottom) to 1 (top): where the pass stops, just before a note; the top is the end of the song. */
+  function setEnd(value: number) {
+    const raw = practice.from + value * (practice.duration - practice.from);
+    const to = value >= 0.98 ? practice.duration : (nearestNote(raw, practice.from + 0.01) ?? practice.duration);
+    practice.setEnd(to);
+    show(practice.to >= practice.duration - 0.001 ? "To the end" : `Up to bar ${barAt(practice.to - 0.001)}`);
+  }
+
+  function wholeSong() {
+    practice.setSection(practice.firstNote, practice.duration);
+  }
+
   function keep(take: Take) {
     if (!keepTake(takes, take)) return;
     saveTakes();
     show("Take kept");
   }
+
+  function forget(take: Take) {
+    takes.kept = takes.kept.filter((t) => t.at !== take.at);
+    saveTakes();
+  }
+
+  let reviewPanel = $state<ReturnType<typeof ReviewPanel> | null>(null);
+  const hasTakes = $derived(!!(takes.latest || takes.best || takes.kept.length));
 
   /** The record pad: keeps the pass you just finished, or else the one you're about to play or playing. */
   function recordPad() {
@@ -130,7 +194,8 @@
       .catch(() => {});
     const stopPads = onAction((action) => {
       if (action === "play") {
-        if (reviewing) again();
+        // In the review, ▶ (and Space) play the take back; "Play again" there starts practicing.
+        if (reviewing) reviewPanel?.togglePlayback();
         else toggle();
       } else if (action === "stop") {
         if (reviewing) reviewing = false;
@@ -148,7 +213,19 @@
         show(`Lead-in ${leadIn} s`);
       }
     });
-    let raf = requestAnimationFrame(function tick() {
+    // On this screen the touch strips move through the song instead of bending the sound.
+    engine.setStripsAsControls(true).catch(() => {});
+    const stopStrips = onStrip((strip, value) => {
+      if (strip === "left") jog = value;
+      else if (!reviewing) setEnd(value);
+    });
+    let lastFrame = performance.now();
+    let raf = requestAnimationFrame(function tick(now) {
+      updateJog(Math.min(0.1, (now - lastFrame) / 1000), now);
+      lastFrame = now;
+      sectionFrom = practice.from;
+      sectionTo = practice.to;
+      hasSection = practice.hasSection;
       time = practice.time;
       playing = practice.playing;
       finished = practice.finished;
@@ -167,6 +244,8 @@
     return () => {
       stopPads();
       stopFaders();
+      stopStrips();
+      engine.setStripsAsControls(false).catch(() => {});
       cancelAnimationFrame(raf);
     };
   });
@@ -274,6 +353,14 @@
 <div class="top">
   <TopBar back={nav.backLabel} onback={() => nav.back()} title={song.title} subtitle={song.artist || undefined}>
     {#snippet actions()}
+      {#if hasTakes}
+        <button class="options takes" aria-pressed={reviewing} onclick={() => (reviewing = !reviewing)}>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <circle cx="12" cy="12" r="8" /><circle class="fill" cx="12" cy="12" r="3.5" />
+          </svg>
+          Takes
+        </button>
+      {/if}
       <div class="anchor">
         <button class="options" aria-expanded={optionsOpen} onclick={() => (optionsOpen = !optionsOpen)}>
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -338,6 +425,18 @@
                 </div>
               {/if}
             {/if}
+            <div class="field">
+              <span class="label">Part of the song</span>
+              <span class="plan">
+                {#if hasSection}
+                  Bars <b>{barAt(sectionFrom)}–{barAt(sectionTo - 0.001)}</b>
+                  <button class="edit inline" onclick={wholeSong}>Whole song</button>
+                {:else}
+                  The whole song
+                {/if}
+                <br /><span class="dim">Left strip moves the start, right strip sets the end</span>
+              </span>
+            </div>
             {#if mode !== "listen"}
               <div class="field">
                 <span class="label">Your keyboard</span>
@@ -464,6 +563,12 @@
       <span class="chip octave soon">{octaveLabel(nextChange.shift)} at bar {nextChange.bar}</span>
     {/if}
   {/if}
+  {#if hasSection}
+    <span class="chip section" title="Left strip moves the start, right strip the end">
+      Bars {barAt(sectionFrom)}–{barAt(sectionTo - 0.001)}
+      <button class="clear" aria-label="Practice the whole song" onclick={wholeSong}>×</button>
+    </span>
+  {/if}
   {#if keepNext}
     <span class="chip keeping" title="Tap the record pad again to undo">
       <span class="rec" aria-hidden="true"></span>Keeping this take
@@ -473,7 +578,16 @@
 
 {#if reviewing}
   <div class="review-layer" transition:fly={{ y: 18, duration: 240, easing: cubicOut }}>
-    <ReviewPanel {practice} {takes} current={lastTake} onclose={() => (reviewing = false)} onagain={again} onkeep={keep} />
+    <ReviewPanel
+      bind:this={reviewPanel}
+      {practice}
+      {takes}
+      current={lastTake}
+      onclose={() => (reviewing = false)}
+      onagain={again}
+      onkeep={keep}
+      onforget={forget}
+    />
   </div>
 {/if}
 
@@ -668,6 +782,38 @@
     border-color: rgba(127, 212, 255, 0.4);
   }
 
+  .section {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: 6px;
+    color: rgb(255, 181, 71);
+    border-color: rgba(255, 181, 71, 0.45);
+  }
+  .clear {
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    color: inherit;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .edit.inline {
+    margin-left: 8px;
+    padding: 3px 10px;
+    font-size: 12px;
+  }
+  .takes svg .fill {
+    fill: var(--coral);
+  }
+  .takes[aria-pressed="true"] {
+    background: rgba(255, 255, 255, 0.12);
+  }
   .plan {
     font-size: 13px;
     line-height: 1.5;

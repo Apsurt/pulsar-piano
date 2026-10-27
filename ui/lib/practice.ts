@@ -29,6 +29,8 @@ export type Recording = {
   played: PlayedNote[];
   /** Wait mode: real seconds the song waited for you at each chord (by its start), where it waited. */
   waits: { start: number; seconds: number }[];
+  /** Only part of the song was played: notes starting from `from` up to `to` (song seconds). */
+  section?: { from: number; to: number };
 };
 
 /** Default real seconds from pressing play to the first note. */
@@ -52,10 +54,13 @@ export class Practice {
   /** Track names, and how many notes each has. */
   readonly tracks: { name: string; notes: number }[];
   /** When the first note starts, in song seconds. */
-  private readonly firstNote: number;
+  readonly firstNote: number;
 
   /** Song position in seconds (at 100% speed). Negative during the lead-in. */
   time: number;
+  /** The part being practiced, in song seconds: notes starting from `from`, up to `to`. The whole song by default. */
+  from: number;
+  to: number;
   finished = false;
   speed = 1;
   /** Real seconds between pressing play and the first note. */
@@ -115,13 +120,36 @@ export class Practice {
     this.played = new Set(this.tracks.keys());
     this.heard = new Set(this.tracks.keys());
     this.firstNote = this.chords[0]?.start ?? 0;
+    this.from = this.firstNote;
+    this.to = this.duration;
     this.leadIn = Math.max(0, leadIn);
     this.time = this.startTime;
   }
 
-  /** Where playback begins: the lead-in before the first note, in song seconds at the current speed. */
+  /** Where playback begins: the lead-in before the section's first note, in song seconds at the current speed. */
   get startTime(): number {
-    return this.firstNote - this.leadIn * this.speed;
+    return this.from - this.leadIn * this.speed;
+  }
+
+  /** Practicing part of the song rather than all of it. */
+  get hasSection(): boolean {
+    return this.from > this.firstNote + 0.001 || this.to < this.duration - 0.001;
+  }
+
+  /** Practice from `from` to `to` (song seconds, kept inside the song); stops and goes to the new start. */
+  setSection(from: number, to: number) {
+    this.to = Math.min(this.duration, Math.max(to, this.firstNote + 0.05));
+    this.from = Math.min(Math.max(from, this.firstNote), this.to - 0.05);
+    this.restart();
+  }
+
+  /** Moves just the end point; playing carries on (a pass already past it finishes). */
+  setEnd(to: number) {
+    this.to = Math.min(this.duration, Math.max(to, this.from + 0.05));
+  }
+
+  private inSection(note: PracticeNote): boolean {
+    return note.start >= this.from - 0.001 && note.start < this.to;
   }
 
   get playing(): boolean {
@@ -155,13 +183,14 @@ export class Practice {
     return this.mode === "listen" ? this.heard : this.played;
   }
 
-  /** On screen, and yours to play (or, when listening, to hear). */
+  /** On screen, and yours to play (or, when listening, to hear): on a shown track, in the section. */
   isActive(note: PracticeNote): boolean {
-    return this.shown.has(note.track);
+    return this.shown.has(note.track) && this.inSection(note);
   }
 
   /** Pulsar plays this note: the heard tracks when listening, the other tracks when accompanying. */
   isAuto(note: PracticeNote): boolean {
+    if (!this.inSection(note)) return false;
     return this.mode === "listen" ? this.heard.has(note.track) : this.accompany && !this.played.has(note.track);
   }
 
@@ -210,8 +239,10 @@ export class Practice {
     let next = this.time + dt * this.speed;
     if (this.mode === "wait") {
       const chord = this.nextChord();
-      if (chord && this.time >= chord.start) this.waits.set(this.cursor, (this.waits.get(this.cursor) ?? 0) + dt);
-      if (chord && next >= chord.start) next = chord.start;
+      // Only chords in the section hold the song up; past its end, the pass just finishes.
+      const due = chord && chord.start < this.to ? chord : undefined;
+      if (due && this.time >= due.start) this.waits.set(this.cursor, (this.waits.get(this.cursor) ?? 0) + dt);
+      if (due && next >= due.start) next = due.start;
     } else if (this.mode === "tempo") {
       const late = next - HIT_WINDOW * this.speed;
       while (this.cursor < this.chords.length && this.chords[this.cursor].start < late) {
@@ -221,7 +252,7 @@ export class Practice {
     }
     this.autoplay(this.time, next);
     this.time = next;
-    if (this.time >= this.duration + 0.5) {
+    if (this.time >= this.to + 0.5) {
       this.passes++;
       this.lastScore = this.total ? Math.round((this.hits / this.total) * 100) : 0;
       const recording = this.recording();
@@ -278,7 +309,7 @@ export class Practice {
 
   /** Jump to a song position; everything from there on is to be played again. */
   seek(time: number) {
-    this.time = Math.min(Math.max(time, this.startTime), this.duration);
+    this.time = Math.min(Math.max(time, Math.min(this.startTime, this.firstNote - this.leadIn * this.speed)), this.duration);
     // Back at the start is a fresh pass; anywhere else, this pass is no longer a full one.
     if (this.time <= this.startTime + 1e-6) {
       this.take = [];
@@ -325,6 +356,7 @@ export class Practice {
       tracks: [...this.played].sort((a, b) => a - b),
       played: this.take.map((n) => ({ ...n, end: Number.isNaN(n.end) ? this.time : n.end })),
       waits: [...this.waits].map(([chord, seconds]) => ({ start: this.chords[chord].start, seconds })),
+      ...(this.hasSection ? { section: { from: this.from, to: this.to } } : {}),
     };
   }
 

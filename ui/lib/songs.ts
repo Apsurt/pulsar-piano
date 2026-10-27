@@ -23,6 +23,8 @@ export type SongSummary = {
   notes: number;
   seconds: number;
   tracks: number;
+  /** Your best full pass, 0–100. */
+  best: number | null;
   modified: number;
 };
 export type Imported = { songs: SongSummary[]; errors: string[] };

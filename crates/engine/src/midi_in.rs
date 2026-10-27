@@ -1,7 +1,7 @@
 //! MIDI input. midir can't report hot-plugging, so a housekeeping thread polls the port list every second
 //! and connects to every input it finds. It also frees instruments the audio thread has swapped out.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -11,13 +11,33 @@ use midir::{Ignore, MidiInput, MidiInputConnection};
 use rtrb::{Consumer, Producer};
 use serde::Serialize;
 
-use crate::{EngineEvent, Instrument, KeyFilter, MidiEvent, Source, Touch};
+use crate::{CC_MODULATION, EngineEvent, Instrument, KeyFilter, MidiEvent, Source, Touch};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MidiDevice {
     pub name: String,
     /// False when the port exists but couldn't be opened, e.g. another app (a DAW) holds it on Windows.
     pub connected: bool,
+}
+
+/// What the app can change about keyboard input while it runs, shared with every MIDI callback.
+pub(crate) struct InputSettings {
+    /// A `Touch`.
+    pub touch: AtomicU8,
+    /// Which notes may sound.
+    pub filter: KeyFilter,
+    /// Pitch bend and modulation (the touch strips) are app controls rather than sound.
+    pub strips: AtomicBool,
+}
+
+impl Default for InputSettings {
+    fn default() -> Self {
+        Self {
+            touch: AtomicU8::new(Touch::default().to_u8()),
+            filter: KeyFilter::default(),
+            strips: AtomicBool::new(false),
+        }
+    }
 }
 
 /// The single entry point for every event, whatever its source: audio first, then the UI.
@@ -47,8 +67,7 @@ pub(crate) fn spawn_housekeeping(
     events: mpsc::Sender<EngineEvent>,
     mut garbage: Consumer<Box<dyn Instrument>>,
     devices: Arc<Mutex<Vec<MidiDevice>>>,
-    touch: Arc<AtomicU8>,
-    filter: Arc<KeyFilter>,
+    settings: Arc<InputSettings>,
     stop: mpsc::Receiver<()>,
 ) {
     let _ = thread::Builder::new()
@@ -76,8 +95,7 @@ pub(crate) fn spawn_housekeeping(
                             is_control_port(name),
                             input.clone(),
                             events.clone(),
-                            touch.clone(),
-                            filter.clone(),
+                            settings.clone(),
                         )
                     {
                         connections.push((name.clone(), conn));
@@ -111,8 +129,7 @@ fn connect(
     control: bool,
     input: Arc<Mutex<Producer<MidiEvent>>>,
     events: mpsc::Sender<EngineEvent>,
-    touch: Arc<AtomicU8>,
-    filter: Arc<KeyFilter>,
+    settings: Arc<InputSettings>,
 ) -> Option<MidiInputConnection<()>> {
     let mut midi = MidiInput::new("Pulsar").ok()?;
     midi.ignore(Ignore::All);
@@ -127,12 +144,26 @@ fn connect(
         "pulsar-in",
         move |_, bytes, _| {
             if let Some(mut event) = MidiEvent::parse(bytes) {
+                // Touch strips used as app controls: reported, but they don't bend or modulate the sound.
+                let strip = matches!(
+                    event,
+                    MidiEvent::PitchBend { .. }
+                        | MidiEvent::ControlChange {
+                            controller: CC_MODULATION,
+                            ..
+                        }
+                );
+                if strip && source == Source::Device && settings.strips.load(Ordering::Relaxed) {
+                    let _ = events.send(EngineEvent::Midi(event, source));
+                    return;
+                }
                 if let MidiEvent::NoteOn { key, velocity, .. } = &mut event
                     && source == Source::Device
                 {
-                    *velocity = Touch::from_u8(touch.load(Ordering::Relaxed)).apply(*velocity);
+                    *velocity =
+                        Touch::from_u8(settings.touch.load(Ordering::Relaxed)).apply(*velocity);
                     // A key the app isn't expecting: the UI still sees it, but it makes no sound.
-                    if *velocity > 0 && !filter.allows(*key) {
+                    if *velocity > 0 && !settings.filter.allows(*key) {
                         let _ = events.send(EngineEvent::Midi(event, source));
                         return;
                     }
